@@ -18,9 +18,11 @@ constexpr double p1 = 0.3;
 constexpr double p2 = 0.1;
 constexpr double p3 = 0.3;
 constexpr double p = 0.3;
+constexpr double SPEED = 2e3; // bytes per ms
+constexpr double MEAN_DATA_PACKET_SIZE = 755;
+constexpr double MEAN_DATA_SERVICE_TIME = MEAN_DATA_PACKET_SIZE / SPEED;
 constexpr int NO_CHANNELS = 30;
 constexpr int VOICE_PACKET_SIZE = 64;
-constexpr int SPEED = 2e6;
 
 // distributions
 uniform_real_distribution<double> unif(0, 1);
@@ -40,14 +42,15 @@ int getPacketSize() {
 enum Packet_type {DATA, VOICE};
 
 struct Event {
-  uint64_t packet_size;
-  uint64_t arrival;
-  uint64_t channel;
-  uint64_t vpackets;
-  uint64_t idx;
+  int packet_size;
+  int arrival;
+  int channel;
+  int vpackets;
+  int idx;
+  int round_idx;
   Packet_type p_type;
 
-  // TODO: fix later
+  // TODO: fix later (uh... fixed?)
   bool operator<(const Event &rhs) const {
       return arrival < rhs.arrival;
   }
@@ -57,9 +60,9 @@ struct Event {
     packet_size = getPacketSize();
     arrival = sim_time + time_between_data_packets(mt);
   }
-  
+
   // Constructor for voice events
-  Event(uint64_t channel, double sim_time): channel(channel), p_type(VOICE) {
+  Event(int channel, double sim_time): channel(channel), p_type(VOICE) {
     packet_size = VOICE_PACKET_SIZE;
     arrival = sim_time + time_between_voice_packet_groups(mt);
     vpackets = no_voice_packets(mt);
@@ -67,36 +70,42 @@ struct Event {
   }
 };
 
-void run_simulation(int round_size, double rho, bool interrupt) {
+void run_simulation(int transient_phase_size, int rounds, int round_size, double rho, bool interrupt) {
   double sim_time = 0;
-  double mean = 755/SPEED;
   list<Event> events;
+  time_between_data_packets = exponential_distribution<double>(rho/MEAN_DATA_SERVICE_TIME);
 
-  time_between_data_packets = exponential_distribution<double>(rho/mean);
 
+  // Initialize events queue
   events.emplace_back(sim_time);
   for (int i = 0; i < NO_CHANNELS; ++i) {
     events.emplace_back(i, sim_time);
   }
 
-  int round_idx = 0;
+  int events_processed = 0;
 
-  while (round_idx++ < round_size) {
+  while (events_processed < round_size * rounds) {
     Event &e = events.front();
 
     // without interrupt
     double next_sim_time = sim_time + e.packet_size / SPEED;
 
     // process event
-    if (e.p_type == DATA && !interrupt) {
-		events.emplace_back(e.arrival);
-	} else if (e.p_type == DATA) {
-		
-	} else {
-		
-	}
-	
+    if (e.p_type == DATA) {
+      auto new_event = events.front();
+      for (auto &event: events) {
+        if (event.p_type == VOICE && event.arrival < next_sim_time) {
+          swap(e, event);
+          // new_event = event;
+          break;
+        }
+      }
 
+
+		  events.emplace_back(e.arrival);
+  	} else {
+
+  	}
 
     // create new event of the same type
     //~ events.pop();
@@ -105,10 +114,11 @@ void run_simulation(int round_size, double rho, bool interrupt) {
 }
 
 int main(int argc, char **argv) {
-  int rounds, round_size;
+  int transient_phase_size, rounds, round_size;
 
-  for (int i = 0; i < rounds; ++i) {
-    run_simulation(round_size, 0.1, false);
+  for (double rho = 0.1; rho <= 0.71; rho += 0.1) {
+    run_simulation(transient_phase_size, rounds, round_size, rho, false);
+    run_simulation(transient_phase_size, rounds, round_size, rho, true);
   }
 
   return 0;
