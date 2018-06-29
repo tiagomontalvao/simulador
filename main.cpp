@@ -111,8 +111,8 @@ int main(int argc, char **argv) {
 
     transient_phase_size = rounds = round_size = 1;
 
-    // run_simulation(transient_phase_size, rounds, round_size, 0.7, false);
-    // return 0;
+    run_simulation(transient_phase_size, rounds, round_size, 0.7, true);
+    return 0;
 
     for (double rho = 0.1; rho <= 0.71; rho += 0.1) {
         run_simulation(transient_phase_size, rounds, round_size, rho, false);
@@ -186,11 +186,13 @@ void run_simulation(int transient_phase_size, int rounds, int round_size, double
     // dbg_show_queue();
 
     packets_processed = 0;
-    int n = 1000000;
+    int n = 100000;
 
     while (packets_processed < n) {
         Event cur_event = event_queue.front();
         sim_t = cur_event.t;
+
+        // log(cur_event);
 
         if (cur_event.type == ARRIVAL)
             handle_arrival(cur_event, interrupt);
@@ -201,7 +203,6 @@ void run_simulation(int transient_phase_size, int rounds, int round_size, double
         sort(event_queue.begin(), event_queue.end());
     }
 
-    cout << setprecision(12);
     cout << L / data_packets << endl;
 }
 
@@ -219,7 +220,6 @@ void handle_data_arrival(Event &cur_event) {
     if (!idle) {
         data_queue.push_back(cur_event);
     } else {
-        event_queue.push_back(make_data_dispatch(cur_event));
         enter_the_server(cur_event);
     }
 
@@ -235,24 +235,18 @@ void handle_voice_arrival(Event &cur_event, bool interrupt) {
     total_time = cur_event.t;
 
     if (!idle) {
-        if (event_on_server.packet_type == DATA) {
-            if (interrupt){
-                data_queue.insert(data_queue.begin(), event_on_server);
-                
-                auto it = find_if(event_queue.begin(), event_queue.end(), is_dispatch);
-                if (it != event_queue.end())
-                    event_queue.erase(it);
-                
-                event_queue.push_back(make_voice_dispatch(cur_event));
-                enter_the_server(cur_event);
-            } else {
-                voice_queue.push_back(cur_event);
+        if (interrupt && event_on_server.packet_type == DATA) {
+            auto it = find_if(event_queue.begin(), event_queue.end(), is_dispatch);
+            if (it != event_queue.end()) {
+                event_queue.erase(it);
             }
+
+            data_queue.insert(data_queue.begin(), event_on_server);
+            enter_the_server(cur_event);
         } else {
             voice_queue.push_back(cur_event);
         }
     } else {
-        event_queue.push_back(make_voice_dispatch(cur_event));
         enter_the_server(cur_event);
     }
 
@@ -336,7 +330,7 @@ Event::Event(int channel): type(ARRIVAL), channel(channel) {
 
 Event make_next_data_arrival(const Event &event) {
     Event new_event(event);
-    new_event.t = event.t + time_between_data_packets(mt);
+    new_event.t += time_between_data_packets(mt);
     new_event.packet_size = get_packet_size();
 
     return new_event;
