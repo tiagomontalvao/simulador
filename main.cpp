@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <deque>
 #include <iomanip>
 #include <iostream>
 #include <list>
@@ -60,8 +61,8 @@ constexpr double TIME_BETWEEN_VOICE_PACKETS = 16; // ms
 
 double sim_t;
 vector<Event> event_queue;
-vector<Event> data_queue;
-vector<Event> voice_queue;
+deque<Event> data_queue;
+deque<Event> voice_queue;
 Event event_on_server;
 double last_voice_event_t;
 double Nq2;
@@ -187,7 +188,7 @@ void run_simulation(int transient_phase_size, int rounds, int round_size, double
     // dbg_show_queue();
 
     packets_processed = 0;
-    int n = 100000;
+    int n = 300000;
 
     while (packets_processed < n) {
         Event cur_event = event_queue.front();
@@ -276,10 +277,10 @@ void handle_voice_dispatch(Event &cur_event) {
 inline void serve_next_packet() {
     if (!voice_queue.empty()) {
         enter_the_server(voice_queue.front());
-        voice_queue.erase(voice_queue.begin());
+        voice_queue.pop_front();
     } else if (!data_queue.empty()) {
         enter_the_server(data_queue.front());
-        data_queue.erase(data_queue.begin());
+        data_queue.pop_front();
     } else {
         idle = true;
     }
@@ -306,7 +307,7 @@ void replace_data_dispatch(const Event &cur_event) {
         it->t = sim_t + VOICE_SERVICE_TIME;
     }
 
-    data_queue.insert(data_queue.begin(), event_on_server);
+    data_queue.push_front(event_on_server);
 }
 
 /*======================================
