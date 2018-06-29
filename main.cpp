@@ -113,8 +113,8 @@ int main(int argc, char **argv) {
 
     transient_phase_size = rounds = round_size = 1;
 
-    run_simulation(transient_phase_size, rounds, round_size, 0.7, true);
-    return 0;
+    // run_simulation(transient_phase_size, rounds, round_size, 0.7, true);
+    // return 0;
 
     for (double rho = 0.1; rho <= 0.71; rho += 0.1) {
         run_simulation(transient_phase_size, rounds, round_size, rho, false);
@@ -188,7 +188,7 @@ void run_simulation(int transient_phase_size, int rounds, int round_size, double
     // dbg_show_queue();
 
     packets_processed = 0;
-    int n = 300000;
+    int n = 1000000;
 
     while (packets_processed < n) {
         Event cur_event = event_queue.front();
@@ -201,7 +201,8 @@ void run_simulation(int transient_phase_size, int rounds, int round_size, double
         else 
             handle_dispatch(cur_event);
 
-        event_queue.erase(event_queue.begin());
+        swap(event_queue.front(), event_queue.back());
+        event_queue.pop_back();
         sort(event_queue.begin(), event_queue.end());
     }
 
