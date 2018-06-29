@@ -59,10 +59,10 @@ constexpr double TIME_BETWEEN_VOICE_PACKETS = 16; // ms
 ==================================================*/
 
 double sim_t;
-list<Event> event_queue;
-list<Event> data_queue;
-list<Event> voice_queue;
-Event *event_on_server;
+vector<Event> event_queue;
+vector<Event> data_queue;
+vector<Event> voice_queue;
+Event event_on_server;
 double last_voice_event_t;
 double Nq2;
 double L;
@@ -157,7 +157,6 @@ void simulation_state_init(double rho) {
     event_queue.clear();
     data_queue.clear();
     voice_queue.clear();
-    event_on_server = nullptr;
     idle = true;
     time_between_data_packets = exponential_distribution<double>(rho/MEAN_DATA_SERVICE_TIME);
 }
@@ -169,7 +168,7 @@ void event_queue_init() {
         event_queue.emplace_back(i);
     }
 
-    event_queue.sort();
+    sort(event_queue.begin(), event_queue.end());
 }
 
 /*========================================
@@ -196,11 +195,11 @@ void run_simulation(int transient_phase_size, int rounds, int round_size, double
         else 
             handle_dispatch(cur_event);
 
-        event_queue.pop_front();
-        event_queue.sort();
+        event_queue.erase(event_queue.begin());
+        sort(event_queue.begin(), event_queue.end());
     }
 
-    std::cout << setprecision(12);
+    cout << setprecision(12);
     cout << L / data_packets << endl;
 }
 
@@ -217,14 +216,12 @@ void handle_data_arrival(Event &cur_event) {
     L += cur_event.packet_size;
     data_packets++;
 
-    if (event_on_server) {
-        // cout << "busy" << endl;
+    if (!idle) {
         data_queue.push_back(cur_event);
     } else {
-        // cout << "idle" << endl;
-        // event_queue.emplace_back(DISPATCH, DATA, sim_t + cur_event.packet_size / SPEED);
         event_queue.push_back(make_data_dispatch(cur_event));
-        event_on_server = &cur_event;
+        event_on_server = cur_event;
+        idle = false;
     }
 
     // event_queue.emplace_back(sim_t);
@@ -241,20 +238,21 @@ void handle_voice_arrival(Event &cur_event, bool interrupt) {
     last_voice_event_t = cur_event.t;
     total_time = cur_event.t;
 
-    if (event_on_server) {
+    if (!idle) {
         // cout << "busy" << endl;
-        if (event_on_server->packet_type == DATA) {
+        if (event_on_server.packet_type == DATA) {
             // cout << " with data" << endl;
             if (interrupt){
                 // cout << "interruption" << endl;
-                data_queue.push_front(*event_on_server);
+                data_queue.insert(data_queue.begin(), event_on_server);
                 // event_queue.remove_if(is_dispatch);
                 auto it = find_if(event_queue.begin(), event_queue.end(), is_dispatch);
                 if (it != event_queue.end())
                     event_queue.erase(it);
                 // event_queue.emplace_back(DISPATCH, VOICE, sim_t + VOICE_SERVICE_TIME);
                 event_queue.push_back(make_voice_dispatch(cur_event));
-                event_on_server = &cur_event;
+                event_on_server = cur_event;
+                idle = false;
             } else {
                 // cout << "no interruption" << endl;
                 voice_queue.push_back(cur_event);
@@ -268,7 +266,8 @@ void handle_voice_arrival(Event &cur_event, bool interrupt) {
         // cout << "idle" << endl;
         // event_queue.emplace_back(DISPATCH, VOICE, sim_t + VOICE_SERVICE_TIME);
         event_queue.push_back(make_voice_dispatch(cur_event));
-        event_on_server = &cur_event;
+        event_on_server = cur_event;
+        idle = false;
     }
 
     event_queue.push_back(make_next_voice_arrival(cur_event));
@@ -289,17 +288,19 @@ void handle_data_dispatch(Event &cur_event) {
         // cout << "voice waiting" << endl;
         // event_queue.emplace_back(DISPATCH, VOICE, sim_t + VOICE_SERVICE_TIME);
         event_queue.push_back(make_voice_dispatch(voice_queue.front()));
-        event_on_server = &voice_queue.front();
-        voice_queue.pop_front();
+        event_on_server = voice_queue.front();
+        idle = false;
+        voice_queue.erase(voice_queue.begin());
     } else if (!data_queue.empty()) {
         // cout << "data waiting" << endl;
         // event_queue.emplace_back(DISPATCH, DATA, sim_t + data_queue.front().packet_size / SPEED);
         event_queue.push_back(make_data_dispatch(data_queue.front()));
-        event_on_server = &data_queue.front();
-        data_queue.pop_front();
+        event_on_server = data_queue.front();
+        idle = false;
+        data_queue.erase(data_queue.begin());
     } else {
         // cout << "idle" << endl;
-        event_on_server = nullptr;
+        idle = true;
     }
 
     // cout << data_queue.size() << endl;
@@ -315,20 +316,17 @@ void handle_voice_dispatch(Event &cur_event) {
     total_time = cur_event.t;
 
     if (!voice_queue.empty()) {
-        // cout << "voice waiting" << endl;
-        // event_queue.emplace_back(DISPATCH, VOICE, sim_t + VOICE_SERVICE_TIME);
         event_queue.push_back(make_voice_dispatch(voice_queue.front()));
-        event_on_server = &voice_queue.front();
-        voice_queue.pop_front();
+        event_on_server = voice_queue.front();
+        idle = false;
+        voice_queue.erase(voice_queue.begin());
     } else if (!data_queue.empty()) {
-        // cout << "data waiting" << endl;
-        // event_queue.emplace_back(DISPATCH, DATA, sim_t + data_queue.front().packet_size / SPEED);
         event_queue.push_back(make_data_dispatch(data_queue.front()));
-        event_on_server = &data_queue.front();
-        data_queue.pop_front();
+        event_on_server = data_queue.front();
+        idle = false;
+        data_queue.erase(data_queue.begin());
     } else {
-        // cout << "idle" << endl;
-        event_on_server = nullptr;
+        idle = true;
     }
 }
 
