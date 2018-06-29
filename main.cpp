@@ -90,7 +90,8 @@ void handle_dispatch(Event &cur_event);
 void handle_data_dispatch(Event &cur_event);
 void handle_voice_dispatch(Event &cur_event);
 void serve_next_packet();
-void enter_the_server(const Event &cur_event);
+void enter_the_server(const Event &cur_event, bool force=false);
+void replace_data_dispatch(const Event &cur_event);
 /*----------  EVENT CREATION  ----------*/
 Event make_next_data_arrival(const Event &event);
 Event make_data_dispatch(const Event &event);
@@ -234,20 +235,12 @@ void handle_voice_arrival(Event &cur_event, bool interrupt) {
     last_voice_event_t = cur_event.t;
     total_time = cur_event.t;
 
-    if (!idle) {
-        if (interrupt && event_on_server.packet_type == DATA) {
-            auto it = find_if(event_queue.begin(), event_queue.end(), is_dispatch);
-            if (it != event_queue.end()) {
-                event_queue.erase(it);
-            }
-
-            data_queue.insert(data_queue.begin(), event_on_server);
-            enter_the_server(cur_event);
-        } else {
-            voice_queue.push_back(cur_event);
-        }
-    } else {
+    if (!idle && interrupt && event_on_server.packet_type == DATA) {
+        enter_the_server(cur_event, true);
+    } else if (idle){
         enter_the_server(cur_event);
+    } else {
+        voice_queue.push_back(cur_event);
     }
 
     event_queue.push_back(make_next_voice_arrival(cur_event));
@@ -292,15 +285,28 @@ inline void serve_next_packet() {
     }
 }
 
-inline void enter_the_server(const Event &cur_event) {
+inline void enter_the_server(const Event &cur_event, bool force) {
     if (cur_event.packet_type == DATA) {
         event_queue.push_back(make_data_dispatch(cur_event));
-    } else {
+    } else if (!force) {
         event_queue.push_back(make_voice_dispatch(cur_event));
+    } else {
+        replace_data_dispatch(cur_event);
     }
 
     event_on_server = cur_event;
     idle = false;
+}
+
+void replace_data_dispatch(const Event &cur_event) {
+    auto it = find_if(event_queue.begin(), event_queue.end(), is_dispatch);
+    if (it != event_queue.end()) {
+        *it = cur_event;
+        it->type = DISPATCH;
+        it->t = sim_t + VOICE_SERVICE_TIME;
+    }
+
+    data_queue.insert(data_queue.begin(), event_on_server);
 }
 
 /*======================================
