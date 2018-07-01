@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "boost/sort/sort.hpp"
+#include "boost/sort/spinsort/spinsort.hpp"
 
 using namespace std;
 using namespace boost::sort;

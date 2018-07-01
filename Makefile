@@ -1,6 +1,6 @@
 CXX=g++
 RM=rm -f
-CPPFLAGS=-O3 -Wall -O3 -Isort/include/ -Itype_traits/include/ -Iconfig/include/ -Istatic_assert/include/ -Icore/include/ -Iserialization/include/ -Impl/include/ -Ipreprocessor/include/ -Irange/include/ -Iiterator/include/
+CPPFLAGS=-O3 -Wall -Isort/include/
 
 SRCS=main.cpp
 
@@ -10,4 +10,4 @@ simulador: main.cpp
 	$(CXX) $(SRCS) $(CPPFLAGS) -o simulador
 
 clean:
-	$(RM) main
+	$(RM) simulador

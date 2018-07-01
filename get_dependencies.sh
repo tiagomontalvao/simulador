@@ -1,11 +1,1 @@
-git clone git@github.com:boostorg/config.git
-git clone git@github.com:boostorg/core.git
-git clone git@github.com:boostorg/iterator.git
-git clone git@github.com:boostorg/mpl.git
-git clone git@github.com:boostorg/preprocessor.git
-git clone git@github.com:boostorg/range.git
-git clone git@github.com:boostorg/serialization.git
 git clone git@github.com:boostorg/sort.git
-git clone git@github.com:boostorg/static_assert.git
-git clone git@github.com:boostorg/type_traits.git
-git clone git@github.com:boostorg/utility.git
