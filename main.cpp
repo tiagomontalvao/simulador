@@ -378,11 +378,7 @@ Event::Event(int channel): type(ARRIVAL), channel(channel) {
     t = time_between_voice_packet_groups(mt);
     packet_type = VOICE;
     packet_size = VOICE_PACKET_SIZE;
-    vgroup_size = voice_group_size(mt);
-    while (!vgroup_size) {
-        t += time_between_voice_packet_groups(mt);
-        vgroup_size = voice_group_size(mt);
-    }
+    vgroup_size = voice_group_size(mt) + 1;
 
     arrival_t = t;
     vgroup_idx = 0;
@@ -416,11 +412,7 @@ Event make_next_voice_arrival(const Event &event) {
     }
 
     new_event.t += time_between_voice_packet_groups(mt);
-    new_event.vgroup_size = voice_group_size(mt);
-    while (!new_event.vgroup_size) {
-        new_event.t += time_between_voice_packet_groups(mt);
-        new_event.vgroup_size = voice_group_size(mt);
-    }
+    new_event.vgroup_size = voice_group_size(mt) + 1;
 
     new_event.arrival_t = new_event.t;
     new_event.vgroup_idx = 0;
