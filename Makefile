@@ -1,6 +1,6 @@
 CXX=g++
 RM=rm -f
-CPPFLAGS=-O3 -Wall -Isort/include/
+CPPFLAGS=-O3 -Wall --std=c++11 -Isort/include/
 
 SRCS=main.cpp
 
