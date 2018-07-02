@@ -209,7 +209,6 @@ void run_simulation(int transient_phase_size, int rounds, int round_size, double
         Event cur_event = event_queue.front();
         sim_t = cur_event.t;
 
-
         if (cur_event.type == ARRIVAL)
             handle_arrival(cur_event, interrupt);
         else
