@@ -28,12 +28,12 @@ struct Event {
     // Dispatch events will keep the time of arrival
     double arrival_t;
 
+    // When interrupted, data packets will record the time at which they returned to the queue
+    double queue_t;
+
     // Variables used for both data and voice packets
     Packet_type packet_type;
     int packet_size;
-
-    // When interrupted, data packets will record the time at which they entered the queue
-    double queue_t;
 
     // Variables specific to voice packets
     int channel;
@@ -68,12 +68,11 @@ constexpr double TIME_BETWEEN_VOICE_PACKETS = 16; // ms
 ==================================================*/
 
 double sim_t;
+int packets_processed;
 vector<Event> event_queue;
 deque<Event> data_queue;
 deque<Event> voice_queue;
 Event event_on_server;
-double total_time;
-int packets_processed;
 bool idle;
 
 // stats
@@ -81,6 +80,10 @@ bool idle;
 double T1, W1, X1, Nq1;
 double T2, W2, X2, Nq2;
 
+double tmpX1;
+double tmpW1, tmpW2;
+
+double total_time;
 int data_packets_processed;
 int voice_packets_processed;
 int last_t1, last_t2;
@@ -129,7 +132,6 @@ int main(int argc, char **argv) {
     for (double rho = 0.1; rho <= 0.71; rho += 0.1) {
         run_simulation(transient_phase_size, rounds, round_size, rho, false);
         run_simulation(transient_phase_size, rounds, round_size, rho, true);
-        break;
     }
 
     return 0;
@@ -175,6 +177,10 @@ void statistics_init() {
     T1 = W1 = X1 = Nq1 = 0;
     T2 = W2 = X2 = Nq2 = 0;
 
+    tmpX1 = 0;
+    tmpW1 = tmpW2 = 0;
+
+    total_time = 0;
     data_packets_processed = voice_packets_processed = 0;
     last_t1 = last_t2 = 0;
 }
@@ -203,7 +209,7 @@ void run_simulation(int transient_phase_size, int rounds, int round_size, double
     // Initialize event queue
     event_queue_init();
 
-    int n = 10000000;
+    int n = 2000000;
 
     while (packets_processed < n) {
         Event cur_event = event_queue.front();
@@ -248,11 +254,13 @@ void run_simulation(int transient_phase_size, int rounds, int round_size, double
     cout << "E[Nq2]: " << Nq2/total_time << endl;
     cout << "λ2:     " << (Nq2/total_time) / (W2/voice_packets_processed) << endl;
     cout << "ρ2:     " << (Nq2/total_time) / (W2/voice_packets_processed) * (X2/voice_packets_processed) << endl;
-    cout << endl;
+    cout << endl << defaultfloat;
 
 }
 
 void handle_arrival(Event &cur_event, bool interrupt) {
+    assert(cur_event.type == ARRIVAL);
+
     if (cur_event.packet_type == DATA) {
         handle_data_arrival(cur_event);
         event_queue.push_back(make_next_data_arrival(cur_event));
@@ -263,10 +271,12 @@ void handle_arrival(Event &cur_event, bool interrupt) {
 }
 
 void handle_data_arrival(Event &cur_event) {
-    Nq1 += (sim_t - last_t1) * data_queue.size();
-    last_t1 = cur_event.t;
+    assert(cur_event.type == ARRIVAL && cur_event.packet_type == DATA);
 
     if (!idle) {
+        Nq1 += (sim_t - last_t1) * data_queue.size();
+        last_t1 = sim_t;
+
         cur_event.queue_t = sim_t;
         data_queue.push_back(cur_event);
     } else {
@@ -275,6 +285,8 @@ void handle_data_arrival(Event &cur_event) {
 }
 
 void handle_voice_arrival(Event &cur_event, bool interrupt) {
+    assert(cur_event.type == ARRIVAL && cur_event.packet_type == VOICE);
+
     Nq2 += (sim_t - last_t2) * voice_queue.size();
     last_t2 = sim_t;
 
@@ -288,6 +300,8 @@ void handle_voice_arrival(Event &cur_event, bool interrupt) {
 }
 
 void handle_dispatch(Event &cur_event) {
+    assert(cur_event.type == DISPATCH);
+
     packets_processed++;
     total_time = sim_t;
 
@@ -300,17 +314,27 @@ void handle_dispatch(Event &cur_event) {
 }
 
 void handle_data_dispatch(Event &cur_event) {
-    // TODO: Collect statistics
+    assert(cur_event.type == DISPATCH && cur_event.packet_type == DATA);
     data_packets_processed++;
-    T1 += sim_t - cur_event.arrival_t;
 
-    Nq1 += (sim_t - last_t1) * data_queue.size();
-    last_t1 = sim_t;
+    X1 += cur_event.packet_size / SPEED + tmpX1;
+    tmpX1 = 0;
+
+    W1 += tmpW1;
+    tmpW1 = 0;
+
+    T1 += sim_t - cur_event.arrival_t;
 }
 
 void handle_voice_dispatch(Event &cur_event) {
-    // TODO: Collect statistics
+    assert(cur_event.type == DISPATCH && cur_event.packet_type == VOICE);
     voice_packets_processed++;
+
+    X2 += cur_event.packet_size / SPEED;
+
+    W2 += tmpW2;
+    tmpW2 = 0;
+
     T2 += sim_t - cur_event.arrival_t;
 
     Nq2 += (sim_t - last_t2) * voice_queue.size();
@@ -319,12 +343,15 @@ void handle_voice_dispatch(Event &cur_event) {
 
 inline void serve_next_packet() {
     if (!voice_queue.empty()) {
-        W2 += sim_t - voice_queue.front().arrival_t;
+        tmpW2 += sim_t - voice_queue.front().arrival_t;
         enter_the_server(voice_queue.front());
         voice_queue.pop_front();
     } else if (!data_queue.empty()) {
-        W1 += sim_t - data_queue.front().queue_t;
         enter_the_server(data_queue.front());
+
+        tmpW1 += sim_t - data_queue.front().queue_t;
+        Nq1 += (sim_t - last_t1) * data_queue.size();
+        last_t1 = sim_t;
         data_queue.pop_front();
     } else {
         idle = true;
@@ -332,14 +359,13 @@ inline void serve_next_packet() {
 }
 
 inline void enter_the_server(const Event &cur_event, bool force) {
+    assert(cur_event.type == ARRIVAL);
+
     if (cur_event.packet_type == DATA) {
-        X1 += cur_event.packet_size / SPEED;
         event_queue.push_back(make_data_dispatch(cur_event));
     } else if (!force) {
-        X2 += cur_event.packet_size / SPEED;
         event_queue.push_back(make_voice_dispatch(cur_event));
     } else {
-        X2 += cur_event.packet_size / SPEED;
         replace_data_dispatch(cur_event);
     }
 
@@ -348,15 +374,22 @@ inline void enter_the_server(const Event &cur_event, bool force) {
 }
 
 void replace_data_dispatch(const Event &cur_event) {
+    assert(cur_event.type == ARRIVAL && cur_event.packet_type == VOICE);
+
     auto it = find_if(event_queue.begin(), event_queue.end(), is_dispatch);
-    if (it != event_queue.end()) {
-        X1 -= it->t - sim_t;
-        *it = cur_event;
-        it->type = DISPATCH;
-        it->t = sim_t + VOICE_SERVICE_TIME;
-    }
+    assert(it != event_queue.end() && it->type == DISPATCH && it->packet_type == DATA);
+
+    tmpX1 += it->packet_size / SPEED - (it->t - sim_t);
+    // cout << "interrupted service: " << it->packet_size / SPEED - (it->t - sim_t) << endl;
+
+    *it = cur_event;
+    it->type = DISPATCH;
+    it->t = sim_t + VOICE_SERVICE_TIME;
 
     event_on_server.queue_t = sim_t;
+
+    Nq1 += (sim_t - last_t1) * data_queue.size();
+    last_t1 = sim_t;
     data_queue.push_front(event_on_server);
 }
 
