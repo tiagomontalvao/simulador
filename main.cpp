@@ -4,13 +4,14 @@
 #include <iomanip>
 #include <iostream>
 #include <random>
+#include <set>
 #include <string>
-#include <vector>
 
-#include "boost/sort/spinsort/spinsort.hpp"
+// #define NDEBUG
+#include <cassert>
 
 using namespace std;
-using namespace boost::sort;
+
 
 /*========================================
 =            TYPE DEFINITIONS            =
@@ -24,11 +25,13 @@ struct Event {
     // Every event should have a <type> and the point in time <t> at which it happens
     Event_type type;
     double t;
+    int id;
 
-    // Dispatch events will keep the time of arrival
+    // DISPATCH events will keep the time of arrival
     double arrival_t;
 
     // When interrupted, data packets will record the time at which they returned to the queue
+    // And yes, this is useless for VOICE events
     double queue_t;
 
     // Variables used for both data and voice packets
@@ -42,6 +45,7 @@ struct Event {
 
     // Member functions prototypes
     bool operator<(const Event &rhs) const;
+    bool operator==(const Event &rhs) const;
     Event();
     Event(int channel);
 
@@ -69,11 +73,12 @@ constexpr double TIME_BETWEEN_VOICE_PACKETS = 16; // ms
 
 double sim_t;
 int packets_processed;
-vector<Event> event_queue;
+set<Event> event_queue;
 deque<Event> data_queue;
 deque<Event> voice_queue;
 Event event_on_server;
 bool idle;
+int id_counter;
 
 // stats
 
@@ -116,7 +121,7 @@ Event make_voice_dispatch(const Event &event);
 /*----------  MISC  ----------*/
 bool is_dispatch(const Event &event);
 /*----------  DEBUG & LOG  ----------*/
-void log (Event &event, bool verbose=true, const string &prefix = "");
+void log (const Event &event, bool verbose=true, const string &prefix = "");
 void dbg_show_queue(bool verbose=true);
 
 /*============================
@@ -127,10 +132,13 @@ int main(int argc, char **argv) {
     int transient_phase_size, rounds, round_size;
     ios_base::sync_with_stdio(false);
 
-    transient_phase_size = rounds = round_size = 1;
+    transient_phase_size = 500;
+    rounds = 100;
+    round_size = 50000;
 
-    for (double rho = 0.1; rho <= 0.71; rho += 0.1) {
-        run_simulation(transient_phase_size, rounds, round_size, rho, false);
+    for (double rho = 0.4; rho <= 0.71; rho += 0.1) {
+        run_simulation(transient_phase_size, rounds, round_size, rho, true);
+        break;
         run_simulation(transient_phase_size, rounds, round_size, rho, true);
     }
 
@@ -165,12 +173,12 @@ int get_packet_size() {
 
 void simulation_state_init(double rho) {
     sim_t = 0;
-    packets_processed = 0;
     event_queue.clear();
     data_queue.clear();
     voice_queue.clear();
     idle = true;
     time_between_data_packets = exponential_distribution<double>(rho/MEAN_DATA_SERVICE_TIME);
+    id_counter = 0;
 }
 
 void statistics_init() {
@@ -180,20 +188,18 @@ void statistics_init() {
     tmpX1 = 0;
     tmpW1 = tmpW2 = 0;
 
+    packets_processed = 0;
     total_time = 0;
     data_packets_processed = voice_packets_processed = 0;
     last_t1 = last_t2 = 0;
 }
 
 void event_queue_init() {
-    event_queue.emplace_back();
+    event_queue.emplace();
 
     for (int i = 0; i < NO_CHANNELS; ++i) {
-        event_queue.emplace_back(i);
+        event_queue.emplace(i);
     }
-
-    sort(event_queue.begin(), event_queue.end());
-
 }
 
 /*========================================
@@ -204,56 +210,43 @@ void run_simulation(int transient_phase_size, int rounds, int round_size, double
     // Simulation state initialization
     simulation_state_init(rho);
 
+    // Initialize incremental sums and counters
     statistics_init();
 
     // Initialize event queue
     event_queue_init();
 
-    int n = 2000000;
+    int n = rounds * round_size;
 
     while (packets_processed < n) {
-        Event cur_event = event_queue.front();
+        Event cur_event = *event_queue.begin();
+        event_queue.erase(event_queue.begin());
+        
         sim_t = cur_event.t;
 
         if (cur_event.type == ARRIVAL)
             handle_arrival(cur_event, interrupt);
         else
             handle_dispatch(cur_event);
-
-        swap(event_queue.front(), event_queue.back());
-        event_queue.pop_back();
-
-        // sort(event_queue.begin(), event_queue.end());
-        spinsort(event_queue.begin(), event_queue.end());
     }
 
-    // cout << "E[X1]:  " << X1/(data_packets_processed*1e3) << endl;
-    // cout << "E[W1]:  " << W1/(data_packets_processed*1e3) << endl;
-    // cout << "E[T1]:  " << T1/(data_packets_processed*1e3) << endl;
-    // cout << "E[Nq1]: " << Nq1/total_time << endl;
-    // cout << endl;
-    // cout << "E[X2]:  " << VOICE_SERVICE_TIME/1e3 << endl;
-    // cout << "E[W2]:  " << W2/(voice_packets_processed*1e3) << endl;
-    // cout << "E[T2]:  " << T2/(voice_packets_processed*1e3) << endl;
-    // cout << "E[Nq2]: " << Nq2/total_time << endl;
-
     cout << defaultfloat;
-    cout << (interrupt ? "Com" : "Sem") << " interrupção. ρ1 = " << rho << endl;
+    cout << (interrupt ? "Com" : "Sem") << " interrupção. ρ₁ = " << rho << endl;
     cout << fixed << setprecision(6);
-    cout << "E[X1]:  " << X1/data_packets_processed << endl;
-    cout << "E[W1]:  " << W1/data_packets_processed << endl;
-    cout << "E[T1]:  " << T1/data_packets_processed << endl;
-    cout << "E[Nq1]: " << Nq1/total_time << endl;
-    cout << "λ1:     " << (Nq1/total_time) / (W1/data_packets_processed) << endl;
-    cout << "ρ1:     " << (Nq1/total_time) / (W1/data_packets_processed) * (X1/data_packets_processed) << endl;
+    cout << "E[X₁]:  " << X1/data_packets_processed << endl;
+    cout << "E[W₁]:  " << W1/data_packets_processed << endl;
+    cout << "E[T₁]:  " << T1/data_packets_processed << endl;
+    cout << "E[Nq₁]: " << Nq1/total_time << endl;
+    // cout << "λ₁:     " << (Nq1/total_time) / (W1/data_packets_processed) << endl;
+    // cout << "ρ₁:     " << (Nq1/total_time) / (W1/data_packets_processed) * (X1/data_packets_processed) << endl;
     // cout << "E[Nq1] = lambda1 * E[W1] = " << (rho/MEAN_DATA_SERVICE_TIME) * (W1/data_packets_processed) << endl;
     cout << endl;
-    cout << "E[X2]:  " << X2/voice_packets_processed << endl;
-    cout << "E[W2]:  " << W2/voice_packets_processed << endl;
-    cout << "E[T2]:  " << T2/voice_packets_processed << endl;
-    cout << "E[Nq2]: " << Nq2/total_time << endl;
-    cout << "λ2:     " << (Nq2/total_time) / (W2/voice_packets_processed) << endl;
-    cout << "ρ2:     " << (Nq2/total_time) / (W2/voice_packets_processed) * (X2/voice_packets_processed) << endl;
+    cout << "E[X₂]:  " << X2/voice_packets_processed << endl;
+    cout << "E[W₂]:  " << W2/voice_packets_processed << endl;
+    cout << "E[T₂]:  " << T2/voice_packets_processed << endl;
+    cout << "E[Nq₂]: " << Nq2/total_time << endl;
+    // cout << "λ₂:     " << (Nq2/total_time) / (W2/voice_packets_processed) << endl;
+    // cout << "ρ₂:     " << (Nq2/total_time) / (W2/voice_packets_processed) * (X2/voice_packets_processed) << endl;
     cout << endl << defaultfloat;
 
 }
@@ -263,20 +256,20 @@ void handle_arrival(Event &cur_event, bool interrupt) {
 
     if (cur_event.packet_type == DATA) {
         handle_data_arrival(cur_event);
-        event_queue.push_back(make_next_data_arrival(cur_event));
+        event_queue.insert(make_next_data_arrival(cur_event));
     } else {
         handle_voice_arrival(cur_event, interrupt);
-        event_queue.push_back(make_next_voice_arrival(cur_event));
+        event_queue.insert(make_next_voice_arrival(cur_event));
     }
 }
 
 void handle_data_arrival(Event &cur_event) {
     assert(cur_event.type == ARRIVAL && cur_event.packet_type == DATA);
 
-    if (!idle) {
-        Nq1 += (sim_t - last_t1) * data_queue.size();
-        last_t1 = sim_t;
+    Nq1 += (sim_t - last_t1) * data_queue.size();
+    last_t1 = sim_t;
 
+    if (!idle) {
         cur_event.queue_t = sim_t;
         data_queue.push_back(cur_event);
     } else {
@@ -315,6 +308,7 @@ void handle_dispatch(Event &cur_event) {
 
 void handle_data_dispatch(Event &cur_event) {
     assert(cur_event.type == DISPATCH && cur_event.packet_type == DATA);
+    
     data_packets_processed++;
 
     X1 += cur_event.packet_size / SPEED + tmpX1;
@@ -324,6 +318,9 @@ void handle_data_dispatch(Event &cur_event) {
     tmpW1 = 0;
 
     T1 += sim_t - cur_event.arrival_t;
+
+    Nq1 += (sim_t - last_t1) * data_queue.size();
+    last_t1 = sim_t;
 }
 
 void handle_voice_dispatch(Event &cur_event) {
@@ -343,15 +340,16 @@ void handle_voice_dispatch(Event &cur_event) {
 
 inline void serve_next_packet() {
     if (!voice_queue.empty()) {
-        tmpW2 += sim_t - voice_queue.front().arrival_t;
         enter_the_server(voice_queue.front());
+
+        tmpW2 += sim_t - voice_queue.front().arrival_t;
+
         voice_queue.pop_front();
     } else if (!data_queue.empty()) {
         enter_the_server(data_queue.front());
 
         tmpW1 += sim_t - data_queue.front().queue_t;
-        Nq1 += (sim_t - last_t1) * data_queue.size();
-        last_t1 = sim_t;
+
         data_queue.pop_front();
     } else {
         idle = true;
@@ -362,9 +360,9 @@ inline void enter_the_server(const Event &cur_event, bool force) {
     assert(cur_event.type == ARRIVAL);
 
     if (cur_event.packet_type == DATA) {
-        event_queue.push_back(make_data_dispatch(cur_event));
+        event_queue.insert(make_data_dispatch(cur_event));
     } else if (!force) {
-        event_queue.push_back(make_voice_dispatch(cur_event));
+        event_queue.insert(make_voice_dispatch(cur_event));
     } else {
         replace_data_dispatch(cur_event);
     }
@@ -380,16 +378,14 @@ void replace_data_dispatch(const Event &cur_event) {
     assert(it != event_queue.end() && it->type == DISPATCH && it->packet_type == DATA);
 
     tmpX1 += it->packet_size / SPEED - (it->t - sim_t);
-    // cout << "interrupted service: " << it->packet_size / SPEED - (it->t - sim_t) << endl;
 
-    *it = cur_event;
-    it->type = DISPATCH;
-    it->t = sim_t + VOICE_SERVICE_TIME;
-
-    event_on_server.queue_t = sim_t;
+    event_queue.erase(it);
+    event_queue.insert(make_voice_dispatch(cur_event));
 
     Nq1 += (sim_t - last_t1) * data_queue.size();
     last_t1 = sim_t;
+
+    event_on_server.queue_t = sim_t;
     data_queue.push_front(event_on_server);
 }
 
@@ -403,6 +399,7 @@ Event::Event(): type(ARRIVAL) {
     queue_t = arrival_t = t;
     packet_type = DATA;
     packet_size = get_packet_size();
+    id = id_counter++;
 }
 
 // Constructs first voice arrival event (assumes simulation clock is at 0)
@@ -414,6 +411,7 @@ Event::Event(int channel): type(ARRIVAL), channel(channel) {
 
     arrival_t = t;
     vgroup_idx = 0;
+    id = id_counter++;
 }
 
 Event make_next_data_arrival(const Event &event) {
@@ -421,6 +419,7 @@ Event make_next_data_arrival(const Event &event) {
     new_event.t += time_between_data_packets(mt);
     new_event.queue_t = new_event.arrival_t = new_event.t;
     new_event.packet_size = get_packet_size();
+    new_event.id = id_counter++;
 
     return new_event;
 }
@@ -437,6 +436,7 @@ Event make_next_voice_arrival(const Event &event) {
     Event new_event(event);
     new_event.t += TIME_BETWEEN_VOICE_PACKETS;
     new_event.arrival_t = new_event.t;
+    new_event.id = id_counter++;
 
     if (event.vgroup_idx+1 < event.vgroup_size) {
         new_event.vgroup_idx++;
@@ -468,6 +468,10 @@ bool Event::operator<(const Event &rhs) const {
     return t == rhs.t ? (packet_type == VOICE && rhs.packet_type == DATA) : t < rhs.t;
 }
 
+bool Event::operator==(const Event &rhs) const {
+    return id == rhs.id;
+}
+
 bool is_dispatch(const Event &event) {
     return event.type == DISPATCH;
 }
@@ -476,7 +480,7 @@ bool is_dispatch(const Event &event) {
 =            DEBUG & LOG            =
 ===================================*/
 
-void log (Event &e, bool verbose, const string &prefix) {
+void log (const Event &e, bool verbose, const string &prefix) {
     std::cout << fixed;
     std::cout << setprecision(2);
 
@@ -509,7 +513,7 @@ void dbg_show_queue(bool verbose) {
     cout << endl;
     if (!verbose) cout << "{ ";
     int k = 0;
-    for (auto &e: event_queue) {
+    for (const auto &e: event_queue) {
         if (!verbose && k == 16) cout << endl << "  ";
         log(e, verbose);
         k++;

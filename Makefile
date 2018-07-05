@@ -1,13 +1,10 @@
 CXX=g++
 RM=rm -f
-CPPFLAGS=-O3 -Wall --std=c++11 -Isort/include/
+CPPFLAGS=-O3 -Wall --std=c++11
 
 SRCS=main.cpp
 
-all: get_dependencies simulador
-
-get_dependencies: get_dependencies.sh
-	./get_dependencies.sh
+all: simulador
 
 simulador: main.cpp
 	$(CXX) $(SRCS) $(CPPFLAGS) -o simulador
