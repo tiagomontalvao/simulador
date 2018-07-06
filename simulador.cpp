@@ -114,7 +114,7 @@ void handle_data_dispatch(Event &cur_event);
 void handle_voice_dispatch(Event &cur_event);
 void serve_next_packet();
 void enter_the_server(const Event &event, bool force=false);
-void replace_data_dispatch(const Event &cur_event);
+void unschedule_data_dispatch();
 /*----------  EVENT CREATION  ----------*/
 Event make_arrival_from(const Event &event);
 Event make_dispatch_from(const Event &event);
@@ -153,8 +153,8 @@ int main(int argc, char **argv) {
     ios_base::sync_with_stdio(false);
 
     transient_phase_size = 500;
-    rounds = 100;
-    round_size = 5000;
+    rounds = 1000;
+    round_size = 500;
 
     for (double rho = 0.1; rho <= 0.71; rho += 0.1) {
         run_simulation(transient_phase_size, rounds, round_size, rho, false);
@@ -364,27 +364,25 @@ inline void enter_the_server(const Event &event, bool force) {
 
     // Voice packets may enter the server by force when interruption is on
     if (force) {
-        assert(!idle && event.packet_type == VOICE);
-        replace_data_dispatch(event);
-    } else {
-        assert(idle);
-        event_queue.insert(make_dispatch_from(event));
+        assert(!idle && event.packet_type == VOICE && event.type == ARRIVAL);
+        unschedule_data_dispatch();
     }
+
+    // Schedule the dispatch of the entering event
+    event_queue.insert(make_dispatch_from(event));
 
     // Update server state after a packet enters
     event_on_server = event;
     idle = false;
 }
 
-void replace_data_dispatch(const Event &cur_event) {
-    assert(cur_event.type == ARRIVAL && cur_event.packet_type == VOICE);
-
+void unschedule_data_dispatch() {
     // Find the DISPATCH event in the event queue
     auto it = find_if(event_queue.begin(), event_queue.end(),
         [] (const Event &e) {
             return e.type == DISPATCH;
         });
-    // auto it = event_queue.find(make_dispatch_from(event_on_server));
+
     assert(it != event_queue.end() && it->type == DISPATCH && it->packet_type == DATA);
 
     // Update the partial service time for the interrupted data packet
@@ -399,10 +397,8 @@ void replace_data_dispatch(const Event &cur_event) {
     event_on_server.queue_t = sim_t;
     data_queue.push_front(event_on_server);
 
-    // Unschedule the data dispatch event
+    // Remove it from the event queue
     event_queue.erase(it);
-    // Schedule the voice dispatch event
-    event_queue.insert(make_dispatch_from(cur_event));
 }
 
 /*======================================
