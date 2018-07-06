@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <deque>
 #include <iomanip>
@@ -7,11 +8,7 @@
 #include <set>
 #include <string>
 
-// #define NDEBUG
-#include <cassert>
-
 using namespace std;
-
 
 /*========================================
 =            TYPE DEFINITIONS            =
@@ -45,7 +42,6 @@ struct Event {
 
     // Member functions prototypes
     bool operator<(const Event &rhs) const;
-    bool operator==(const Event &rhs) const;
     Event();
     Event(int channel);
 
@@ -102,6 +98,7 @@ int get_packet_size();
 /*----------  INITIALIZATION  ----------*/
 void simulation_state_init(double rho);
 void event_queue_init();
+/*----------  MAIN  ----------*/
 /*----------  SIMULATION LOGIC  ----------*/
 void run_simulation(int transient_phase_size, int rounds, int round_size, double rho, bool interrupt);
 void handle_arrival(Event &cur_event, bool interrupt);
@@ -124,27 +121,6 @@ bool is_dispatch(const Event &event);
 void log (const Event &event, bool verbose=true, const string &prefix = "");
 void dbg_show_queue(bool verbose=true);
 
-/*============================
-=            MAIN            =
-============================*/
-
-int main(int argc, char **argv) {
-    int transient_phase_size, rounds, round_size;
-    ios_base::sync_with_stdio(false);
-
-    transient_phase_size = 500;
-    rounds = 100;
-    round_size = 50000;
-
-    for (double rho = 0.4; rho <= 0.71; rho += 0.1) {
-        run_simulation(transient_phase_size, rounds, round_size, rho, true);
-        break;
-        run_simulation(transient_phase_size, rounds, round_size, rho, true);
-    }
-
-    return 0;
-}
-
 /*======================================================
 =            RANDOM NUMBER GENERATION SETUP            =
 ======================================================*/
@@ -165,6 +141,26 @@ int get_packet_size() {
     if (sample < p1 + p2 + 448*p/1436) return 512;
     if (sample < 1 - p3) return 512 + round(1436*(sample-(p1+p2+448*p/1436))/p);
     return 1500;
+}
+
+/*============================
+=            MAIN            =
+============================*/
+
+int main(int argc, char **argv) {
+    int transient_phase_size, rounds, round_size;
+    ios_base::sync_with_stdio(false);
+
+    transient_phase_size = 500;
+    rounds = 100;
+    round_size = 50000;
+
+    for (double rho = 0.1; rho <= 0.71; rho += 0.1) {
+        run_simulation(transient_phase_size, rounds, round_size, rho, false);
+        run_simulation(transient_phase_size, rounds, round_size, rho, true);
+    }
+
+    return 0;
 }
 
 /*======================================
@@ -465,11 +461,10 @@ Event make_voice_dispatch(const Event &event) {
 ============================*/
 
 bool Event::operator<(const Event &rhs) const {
-    return t == rhs.t ? (packet_type == VOICE && rhs.packet_type == DATA) : t < rhs.t;
-}
-
-bool Event::operator==(const Event &rhs) const {
-    return id == rhs.id;
+    if (t != rhs.t) return t < rhs.t;
+    if (type != rhs.type) return type == DISPATCH;
+    if (packet_type != rhs.packet_type) return packet_type == VOICE;
+    return id < rhs.id;
 }
 
 bool is_dispatch(const Event &event) {
@@ -496,10 +491,11 @@ void log (const Event &e, bool verbose, const string &prefix) {
 
     cout << prefix;
 
-    cout << (e.type == ARRIVAL ? "+ " : "- ");
+    cout << setw(10) << e.t << ": ";
+    cout << (e.type == ARRIVAL ? "+" : "-");
     cout << (e.packet_type == DATA ? "D " : "V ");
-    cout << setw(10) << e.t << "ms ";
-    cout << setw(5) << e.packet_size << "B";
+    cout << left << setw(7) << e.id;
+    cout << right << setw(5) << e.packet_size << "B";
 
     if (e.packet_type == VOICE) {
         cout << setw(3) << " #" << setw(2) << e.channel << " ";
