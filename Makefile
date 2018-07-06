@@ -3,15 +3,20 @@ RM=rm -f
 CPPFLAGS=-Wall --std=c++11
 
 SRCS=simulador.cpp
+OUT=simulador
 
 all: CPPFLAGS += -D NDEBUG -O3
 all: simulador
 
-debug: CPPFLAGS += -g -Og
-debug: simulador
-
 simulador: simulador.cpp
-	$(CXX) $(SRCS) $(CPPFLAGS) -o simulador
+	$(CXX) $(SRCS) $(CPPFLAGS) -o $(OUT)
+
+debug: CPPFLAGS += -g -Og
+debug: OUT=simulador_dbg
+debug: simulador_dbg
+
+simulador_dbg: simulador.cpp
+	$(CXX) $(SRCS) $(CPPFLAGS) -o $(OUT)
 
 clean:
-	$(RM) simulador
+	$(RM) simulador simulador_dbg
