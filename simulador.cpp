@@ -7,6 +7,7 @@
 #include <random>
 #include <set>
 #include <string>
+#include <vector>
 
 using namespace std;
 
@@ -23,9 +24,6 @@ struct Event {
     Event_type type;
     double t;
     int id;
-
-    // DISPATCH events will keep the time of arrival
-    double arrival_t;
 
     // When interrupted, data packets will record the time at which they returned to the queue
     double queue_t;
@@ -52,6 +50,19 @@ bool Event::operator<(const Event &rhs) const {
     return id < rhs.id;
 }
 
+// struct Metrics {
+//     double T1, W1, X1, Nq1;
+//     double T2, W2, X2, Nq2;
+
+//     double tmpX1;
+//     double tmpW1;
+
+//     double total_time;
+//     int data_packets_processed;
+//     int voice_packets_processed;
+//     int last_t1, last_t2;
+// };
+
 /*=========================================
 =            PROBLEM CONSTANTS            =
 =========================================*/
@@ -73,7 +84,6 @@ constexpr double TIME_BETWEEN_VOICE_PACKETS = 16; // ms
 ==================================================*/
 
 double sim_t;
-int packets_processed;
 set<Event> event_queue;
 deque<Event> data_queue;
 deque<Event> voice_queue;
@@ -87,9 +97,10 @@ double T1, W1, X1, Nq1;
 double T2, W2, X2, Nq2;
 
 double tmpX1;
-double tmpW1, tmpW2;
+double tmpW1;
 
 double total_time;
+int packets_processed;
 int data_packets_processed;
 int voice_packets_processed;
 int last_t1, last_t2;
@@ -102,22 +113,25 @@ int last_t1, last_t2;
 int get_packet_size();
 /*----------  INITIALIZATION  ----------*/
 void simulation_state_init(double rho);
+void statistics_init();
 void event_queue_init();
 /*----------  MAIN  ----------*/
 /*----------  SIMULATION LOGIC  ----------*/
-void run_simulation(int transient_phase_size, int rounds, int round_size, double rho, bool interrupt);
+void run_simulation(int warmup_period, int rounds, int round_size, double rho, bool interrupt);
 void handle_arrival(Event &cur_event, bool interrupt);
 void handle_data_arrival(Event &cur_event);
 void handle_voice_arrival(Event &cur_event, bool interrupt);
-void handle_dispatch(Event &cur_event);
-void handle_data_dispatch(Event &cur_event);
-void handle_voice_dispatch(Event &cur_event);
 void serve_next_packet();
 void enter_the_server(const Event &event, bool force=false);
 void unschedule_data_dispatch();
 /*----------  EVENT CREATION  ----------*/
 Event make_arrival_from(const Event &event);
 Event make_dispatch_from(const Event &event);
+/*----------  STATISTICS  ----------*/
+void metrics_update_wait(const Event& event);
+void metrics_update_queue(const Event& cur_event);
+void metrics_update_dispatch(const Event& cur_event);
+void metrics_update_interruption(const Event& cur_event);
 /*----------  DEBUG & LOG  ----------*/
 void log (const Event &event, bool verbose=true, const string &prefix = "");
 void dbg_show_queue(bool verbose=true);
@@ -149,16 +163,16 @@ int get_packet_size() {
 ============================*/
 
 int main(int argc, char **argv) {
-    int transient_phase_size, rounds, round_size;
+    int warmup_period, rounds, round_size;
     ios_base::sync_with_stdio(false);
 
-    transient_phase_size = 500;
+    warmup_period = 0;
     rounds = 1000;
-    round_size = 500;
+    round_size = 1000;
 
     for (double rho = 0.1; rho <= 0.71; rho += 0.1) {
-        run_simulation(transient_phase_size, rounds, round_size, rho, false);
-        run_simulation(transient_phase_size, rounds, round_size, rho, true);
+        run_simulation(warmup_period, rounds, round_size, rho, false);
+        run_simulation(warmup_period, rounds, round_size, rho, true);
     }
 
     return 0;
@@ -183,7 +197,7 @@ void statistics_init() {
     T2 = W2 = X2 = Nq2 = 0;
 
     tmpX1 = 0;
-    tmpW1 = tmpW2 = 0;
+    tmpW1 = 0;
 
     packets_processed = 0;
     total_time = 0;
@@ -206,7 +220,7 @@ void event_queue_init() {
 =            SIMULATION LOGIC            =
 ========================================*/
 
-void run_simulation(int transient_phase_size, int rounds, int round_size, double rho, bool interrupt) {
+void run_simulation(int warmup_period, int rounds, int round_size, double rho, bool interrupt) {
     // Simulation state initialization
     simulation_state_init(rho);
 
@@ -216,7 +230,7 @@ void run_simulation(int transient_phase_size, int rounds, int round_size, double
     // Initialize event queue
     event_queue_init();
 
-    int n = rounds * round_size;
+    int n = warmup_period + rounds * round_size;
 
     while (packets_processed < n) {
         // Get next event and then remove it from event queue
@@ -227,10 +241,13 @@ void run_simulation(int transient_phase_size, int rounds, int round_size, double
         sim_t = cur_event.t;
 
         // Deal with the event
-        if (cur_event.type == ARRIVAL)
+        if (cur_event.type == ARRIVAL) {
+            metrics_update_queue(cur_event);
             handle_arrival(cur_event, interrupt);
-        else
-            handle_dispatch(cur_event);
+        } else {
+            metrics_update_dispatch(cur_event);
+            serve_next_packet();
+        }
     }
 
     cout << defaultfloat;
@@ -271,11 +288,7 @@ void handle_arrival(Event &cur_event, bool interrupt) {
 void handle_data_arrival(Event &cur_event) {
     assert(cur_event.type == ARRIVAL && cur_event.packet_type == DATA);
 
-    Nq1 += (sim_t - last_t1) * data_queue.size();
-    last_t1 = sim_t;
-
     if (!idle) {
-        cur_event.queue_t = sim_t;
         data_queue.push_back(cur_event);
     } else {
         enter_the_server(cur_event);
@@ -284,9 +297,6 @@ void handle_data_arrival(Event &cur_event) {
 
 void handle_voice_arrival(Event &cur_event, bool interrupt) {
     assert(cur_event.type == ARRIVAL && cur_event.packet_type == VOICE);
-
-    Nq2 += (sim_t - last_t2) * voice_queue.size();
-    last_t2 = sim_t;
 
     if (!idle && interrupt && event_on_server.packet_type == DATA) {
         enter_the_server(cur_event, true);
@@ -297,72 +307,30 @@ void handle_voice_arrival(Event &cur_event, bool interrupt) {
     }
 }
 
-void handle_dispatch(Event &cur_event) {
-    assert(cur_event.type == DISPATCH);
-
-    packets_processed++;
-    total_time = sim_t;
-
-    if (cur_event.packet_type == DATA)
-        handle_data_dispatch(cur_event);
-    else
-        handle_voice_dispatch(cur_event);
-
-    serve_next_packet();
-}
-
-void handle_data_dispatch(Event &cur_event) {
-    assert(cur_event.type == DISPATCH && cur_event.packet_type == DATA);
-
-    data_packets_processed++;
-
-    X1 += cur_event.packet_size / SPEED + tmpX1;
-    tmpX1 = 0;
-
-    W1 += tmpW1;
-    tmpW1 = 0;
-
-    T1 += sim_t - cur_event.arrival_t;
-
-    Nq1 += (sim_t - last_t1) * data_queue.size();
-    last_t1 = sim_t;
-}
-
-void handle_voice_dispatch(Event &cur_event) {
-    assert(cur_event.type == DISPATCH && cur_event.packet_type == VOICE);
-    voice_packets_processed++;
-
-    X2 += cur_event.packet_size / SPEED;
-
-    W2 += tmpW2;
-    tmpW2 = 0;
-
-    T2 += sim_t - cur_event.arrival_t;
-
-    Nq2 += (sim_t - last_t2) * voice_queue.size();
-    last_t2 = sim_t;
-}
-
-inline void serve_next_packet() {
+void serve_next_packet() {
     // Server is set to idle until a packet manages to get in
     idle = true;
 
     // Serve next packet waiting in line (voice packets first)
     if (!voice_queue.empty()) {
         enter_the_server(voice_queue.front());
-        tmpW2 += sim_t - voice_queue.front().arrival_t;
         voice_queue.pop_front();
     } else if (!data_queue.empty()) {
         enter_the_server(data_queue.front());
-        tmpW1 += sim_t - data_queue.front().queue_t;
         data_queue.pop_front();
     }
+
+    // If someone left the queue and entered the
+    // server, update its waiting time
+    if (!idle)
+        metrics_update_wait(event_on_server);
 }
 
-inline void enter_the_server(const Event &event, bool force) {
+void enter_the_server(const Event &event, bool force) {
     assert(event.type == ARRIVAL);
 
     // Voice packets may enter the server by force when interruption is on
+    // but the data packet on the server must be returned to the queue
     if (force) {
         assert(!idle && event.packet_type == VOICE && event.type == ARRIVAL);
         unschedule_data_dispatch();
@@ -385,16 +353,11 @@ void unschedule_data_dispatch() {
 
     assert(it != event_queue.end() && it->type == DISPATCH && it->packet_type == DATA);
 
-    // Update the partial service time for the interrupted data packet
-    tmpX1 += it->packet_size / SPEED - (it->t - sim_t);
+    metrics_update_interruption(*it);
 
-    // Also update the product Nq1 * time for the interrupted data packet,
-    // since its return to the queue will increase the queue size
-    Nq1 += (sim_t - last_t1) * data_queue.size();
-    last_t1 = sim_t;
-
-    // Return interrupted data packet to the front of the queue.
+    // Update time at which the interrupted packet entered the queue
     event_on_server.queue_t = sim_t;
+    // Return interrupted data packet to the front of the queue
     data_queue.push_front(event_on_server);
 
     // Remove it from the event queue
@@ -407,7 +370,7 @@ void unschedule_data_dispatch() {
 
 // Constructs first data arrival event (assumes simulation clock is at 0)
 Event::Event(): type(ARRIVAL) {
-    arrival_t = t = time_between_data_packets(mt);
+    queue_t = t = time_between_data_packets(mt);
     packet_type = DATA;
     packet_size = get_packet_size();
     id = id_counter++;
@@ -415,7 +378,7 @@ Event::Event(): type(ARRIVAL) {
 
 // Constructs first voice arrival event (assumes simulation clock is at 0)
 Event::Event(int channel): type(ARRIVAL), channel(channel) {
-    arrival_t = t = time_between_voice_groups(mt);
+    t = time_between_voice_groups(mt);
     packet_type = VOICE;
     packet_size = VOICE_PACKET_SIZE;
     vgroup_size = voice_group_size(mt) + 1;
@@ -448,12 +411,10 @@ Event make_arrival_from(const Event &event) {
         // time after the last arrival
         new_event.t += time_between_data_packets(mt);
         new_event.packet_size = get_packet_size();
+        new_event.queue_t = new_event.t;
     }
 
-    // Backup arrival time
-    new_event.arrival_t = new_event.t;
-
-    // Every event is assigned a unique id
+    // Every arrival event is assigned a unique id
     new_event.id = id_counter++;
 
     return new_event;
@@ -472,6 +433,70 @@ Event make_dispatch_from(const Event &event) {
     }
 
     return new_event;
+}
+
+/*==================================
+=            STATISTICS            =
+==================================*/
+
+void metrics_update_wait(const Event& event) {
+    if (event.packet_type == DATA) {
+        tmpW1 += sim_t - event.queue_t;
+    } else {
+        W2 += sim_t - event.t;
+    }
+}
+
+void metrics_update_queue(const Event& event) {
+    if (event.packet_type == DATA) {
+        Nq1 += (sim_t - last_t1) * data_queue.size();
+        last_t1 = sim_t;
+    } else {
+        Nq2 += (sim_t - last_t2) * voice_queue.size();
+        last_t2 = sim_t;
+    }
+}
+
+void metrics_update_dispatch(const Event& cur_event) {
+    assert(cur_event.type == DISPATCH);
+
+    if (cur_event.packet_type == DATA) {
+        data_packets_processed++;
+
+        X1 += cur_event.packet_size / SPEED + tmpX1;
+        tmpX1 = 0;
+
+        W1 += tmpW1;
+        tmpW1 = 0;
+
+        T1 += sim_t - event_on_server.t;
+
+        assert(abs(T1 - W1 - X1) < 1e-3);
+    } else {
+        voice_packets_processed++;
+
+        X2 += VOICE_SERVICE_TIME;
+
+        T2 += sim_t - event_on_server.t;
+
+        assert(abs(T2 - W2 - X2) < 1e-3);
+    }
+
+    metrics_update_queue(cur_event);
+
+    packets_processed++;
+    total_time = sim_t;
+}
+
+void metrics_update_interruption(const Event& event) {
+    assert(event.type == DISPATCH && event.packet_type == DATA);
+    
+    // Update the partial service time for the interrupted data packet
+    tmpX1 += event.packet_size / SPEED - (event.t - sim_t);
+
+    // Also update the product Nq1 * time for the interrupted data packet,
+    // since its return to the queue will increase the queue size
+    metrics_update_queue(event);
 }
 
 /*===================================
