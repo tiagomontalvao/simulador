@@ -86,10 +86,13 @@ struct Metrics {
     Metrics() {}
 
     Metrics(int rnd, int tgt);
+    void init();
     void update_Nq_sum(const Event &event);
     void update_W_sum(const Event &event);
     void update_on_dispatch(const Event &cur_event);
     void update_on_interruption(const Event &event);
+    Metrics operator+(const Metrics &rhs) const;
+    Metrics operator/(int rhs) const;
 
 private:
     bool should_collect(const Event &event);
@@ -190,14 +193,13 @@ int main(int argc, char **argv) {
     int warmup_period, rounds, round_size;
     ios_base::sync_with_stdio(false);
 
-    warmup_period = 1e4;
-    rounds = 10;
-    round_size = 1e5;
+    warmup_period = 1e2;
+    rounds = 100;
+    round_size = 1e4;
 
-    for (double rho = 0.4; rho <= 0.71; rho += 0.1) {
+    for (double rho = 0.1; rho <= 0.71; rho += 0.1) {
         run_simulation(warmup_period, rounds, round_size, rho, false);
-        // run_simulation(warmup_period, rounds, round_size, rho, true);
-        break;
+        run_simulation(warmup_period, rounds, round_size, rho, true);
     }
 
     return 0;
@@ -253,7 +255,6 @@ void run_simulation(int warmup_period, int rounds, int round_size, double rho, b
 
     // Probably useless
     int n = 0;
-    // int m = 0;
 
     while (round_metrics[rounds-1].end_t < 0) {
         // Get next event and then remove it from event queue
@@ -267,6 +268,7 @@ void run_simulation(int warmup_period, int rounds, int round_size, double rho, b
         if (cur_event.type == ARRIVAL) {
             // New arrivals belong to the current round
             cur_event.round_id = cur_round;
+
             round_metrics[cur_round].update_Nq_sum(cur_event);
             handle_arrival(cur_event, interrupt);
         } else {
@@ -278,18 +280,11 @@ void run_simulation(int warmup_period, int rounds, int round_size, double rho, b
         // Go to the next round, if the current one is finished
         if (round_metrics[cur_round].end_t >= 0) {
             cur_round = (cur_round == rounds) ? 0 : cur_round+1;
-            round_metrics[cur_round].start_t = sim_t;
+            round_metrics[cur_round].init();
         }
     }
 
-    auto print_round = [&rounds] (const Metrics &rm, bool warmup=false) {
-        cout << defaultfloat;
-        if (warmup)
-            cout << "Warm-up round";
-        else
-            cout << "Round " << rm.round_id+1 << "/" << rounds;
-        cout << fixed << setprecision(2);
-        cout << " (" << (warmup ? 0 : rm.start_t) << " --> " << rm.end_t << "):\n";
+    auto print_metrics = [&rounds] (const Metrics &rm) {
         cout << fixed << setprecision(6);
         cout << "E[W1]:    " << setw(15) << left << (rm.W1 ? rm.W1 : 0);
         cout << "E[W2]:    " << (rm.W2 ? rm.W2 : 0) << endl;
@@ -299,17 +294,34 @@ void run_simulation(int warmup_period, int rounds, int round_size, double rho, b
         cout << "E[T2]:    " << (rm.T2 ? rm.T2 : 0) << endl;
         cout << "E[Nq1]:   " << setw(15) << left << (rm.Nq1 ? rm.Nq1 : 0);
         cout << "E[Nq2]:   " << (rm.Nq2 ? rm.Nq2 : 0) << endl;
-        cout << "#:        " << rm.packets_processed << endl;
-        cout << "Refused:  " << rm.refused << endl << endl;
+        cout << defaultfloat;
     };
 
-    print_round(round_metrics[rounds], true);
-    for (auto rm: round_metrics) {
-        if (rm.round_id == rounds) continue;
-        print_round(rm);
-    }
-    cout << endl;
-    cout << n << " packets total" << endl;
+    // auto print_round = [&rounds, &print_metrics] (const Metrics &rm, bool warmup=false) {
+    //     cout << defaultfloat;
+    //     if (warmup)
+    //         cout << "Warm-up round";
+    //     else
+    //         cout << "Round " << rm.round_id+1 << "/" << rounds;
+    //     cout << fixed << setprecision(2);
+    //     cout << " (" << rm.start_t << " --> " << rm.end_t << "):\n";
+    //     print_metrics(rm);
+    //     // cout << "#:        " << rm.packets_processed << endl;
+    //     cout << "Refused:  " << rm.refused << endl << endl;
+    // };
+
+    // print_round(round_metrics[rounds], true);
+    // for (auto rm: round_metrics) {
+    //     if (rm.round_id == rounds) continue;
+    //     print_round(rm);
+    // }
+    // cout << endl;
+
+    cout << fixed << setprecision(2);
+    cout << (interrupt ? "Com" : "Sem") << " interrupção. Rho1 = " << rho << ":" << endl;
+    print_metrics(accumulate(round_metrics.begin(), round_metrics.end()-1, Metrics(0, 0)) / rounds);
+    cout << n << " pacotes processados" << endl << endl;
+
 }
 
 void handle_arrival(Event &cur_event, bool interrupt) {
@@ -479,6 +491,40 @@ Event make_dispatch_from(const Event &event) {
 /*==================================
 =            STATISTICS            =
 ==================================*/
+
+Metrics Metrics::operator+(const Metrics &b) const {
+    auto a = Metrics(*this);
+    a.T1 += b.T1;
+    a.W1 += b.W1;
+    a.X1 += b.X1;
+    a.Nq1 += b.Nq1;
+    a.T2 += b.T2;
+    a.W2 += b.W2;
+    a.X2 += b.X2;
+    a.Nq2 += b.Nq2;
+
+    return a;
+}
+
+Metrics Metrics::operator/(int b) const {
+    auto a = Metrics(*this);
+    a.T1 /= b;
+    a.W1 /= b;
+    a.X1 /= b;
+    a.Nq1 /= b;
+    a.T2 /= b;
+    a.W2 /= b;
+    a.X2 /= b;
+    a.Nq2 /= b;
+
+    return a;
+}
+
+void Metrics::init() {
+    if (start_t >= 0) return;
+    start_t = sim_t;
+    last_t1 = last_t2 = sim_t;
+}
 
 bool Metrics::should_collect(const Event &event) {
     // Returns true if:
