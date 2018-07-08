@@ -23,7 +23,12 @@ struct Event {
     // Every event should have a <type> and the point in time <t> at which it happens
     Event_type type;
     double t;
+
+    // A unique id for each arrival. Used to guarantee std::set won't ignore events
     int id;
+
+    // Identifies the round the event belongs to
+    int round_id;
 
     // When interrupted, data packets will record the time at which they returned to the queue
     double queue_t;
@@ -50,18 +55,52 @@ bool Event::operator<(const Event &rhs) const {
     return id < rhs.id;
 }
 
-// struct Metrics {
-//     double T1, W1, X1, Nq1;
-//     double T2, W2, X2, Nq2;
+struct Metrics {
+    // The round this set of metrics belongs to
+    int round_id;
 
-//     double tmpX1;
-//     double tmpW1;
+    // Number of packets to process
+    int target;
 
-//     double total_time;
-//     int data_packets_processed;
-//     int voice_packets_processed;
-//     int last_t1, last_t2;
-// };
+    // The instant data collection started
+    // < 0 if it hasn't started
+    double start_t;
+
+    // The instant data collection stopped
+    // < 0 if it hasn't stopped
+    double end_t;
+
+    double T1, W1, X1, Nq1;
+    double T2, W2, X2, Nq2;
+
+    double tmpX1;
+    double tmpW1;
+
+    int packets_processed;
+    int data_packets_processed;
+    int voice_packets_processed;
+    int last_t1, last_t2;
+
+    int refused;
+
+    Metrics() {}
+
+    Metrics(int rnd, int tgt);
+    void update_Nq_sum(const Event &event);
+    void update_W_sum(const Event &event);
+    void update_on_dispatch(const Event &cur_event);
+    void update_on_interruption(const Event &event);
+
+private:
+    bool should_collect(const Event &event);
+    void compute_estimators();
+};
+
+Metrics::Metrics(int rnd, int tgt):
+round_id(rnd), target(tgt), start_t(-1), end_t(-1),
+T1(0), W1(0), X1(0), Nq1(0), T2(0), W2(0), X2(0), Nq2(0),
+tmpX1(0), tmpW1(0), packets_processed(0), data_packets_processed(0),
+voice_packets_processed(0), last_t1(0), last_t2(0), refused(0) {}
 
 /*=========================================
 =            PROBLEM CONSTANTS            =
@@ -90,20 +129,8 @@ deque<Event> voice_queue;
 Event event_on_server;
 bool idle;
 int id_counter;
-
-// stats
-
-double T1, W1, X1, Nq1;
-double T2, W2, X2, Nq2;
-
-double tmpX1;
-double tmpW1;
-
-double total_time;
-int packets_processed;
-int data_packets_processed;
-int voice_packets_processed;
-int last_t1, last_t2;
+int cur_round;
+vector<Metrics> round_metrics;
 
 /*===========================================
 =            FUNCTION PROTOTYPES            =
@@ -128,10 +155,7 @@ void unschedule_data_dispatch();
 Event make_arrival_from(const Event &event);
 Event make_dispatch_from(const Event &event);
 /*----------  STATISTICS  ----------*/
-void metrics_update_wait(const Event& event);
-void metrics_update_queue(const Event& cur_event);
-void metrics_update_dispatch(const Event& cur_event);
-void metrics_update_interruption(const Event& cur_event);
+// See class Metrics definition
 /*----------  DEBUG & LOG  ----------*/
 void log (const Event &event, bool verbose=true, const string &prefix = "");
 void dbg_show_queue(bool verbose=true);
@@ -144,7 +168,7 @@ random_device rd;
 mt19937 mt(rd());
 
 // distributions
-uniform_real_distribution<double> unif(0, 1);
+uniform_real_distribution<double> unif(0.0, 1.0);
 exponential_distribution<double> time_between_data_packets;
 exponential_distribution<double> time_between_voice_groups(1.0/650);
 geometric_distribution<int> voice_group_size(1.0/22);
@@ -166,13 +190,14 @@ int main(int argc, char **argv) {
     int warmup_period, rounds, round_size;
     ios_base::sync_with_stdio(false);
 
-    warmup_period = 0;
-    rounds = 1000;
-    round_size = 1000;
+    warmup_period = 1e4;
+    rounds = 10;
+    round_size = 1e5;
 
-    for (double rho = 0.1; rho <= 0.71; rho += 0.1) {
+    for (double rho = 0.4; rho <= 0.71; rho += 0.1) {
         run_simulation(warmup_period, rounds, round_size, rho, false);
-        run_simulation(warmup_period, rounds, round_size, rho, true);
+        // run_simulation(warmup_period, rounds, round_size, rho, true);
+        break;
     }
 
     return 0;
@@ -182,7 +207,7 @@ int main(int argc, char **argv) {
 =            INITIALIZATION            =
 ======================================*/
 
-void simulation_state_init(double rho) {
+void simulation_state_init(int warmup_period, int rounds, int round_size, double rho) {
     sim_t = 0;
     event_queue.clear();
     data_queue.clear();
@@ -190,21 +215,20 @@ void simulation_state_init(double rho) {
     idle = true;
     time_between_data_packets = exponential_distribution<double>(rho/MEAN_DATA_SERVICE_TIME);
     id_counter = 0;
-}
 
-void statistics_init() {
-    T1 = W1 = X1 = Nq1 = 0;
-    T2 = W2 = X2 = Nq2 = 0;
+    // position 'rounds' is for the warmup period
+    cur_round = warmup_period ? rounds : 0;
 
-    tmpX1 = 0;
-    tmpW1 = 0;
+    round_metrics.resize(rounds+1); // rounds + warmup
+    for (int i = 0; i < rounds; ++i) {
+        round_metrics[i] = Metrics(i, round_size);
+    }
+    round_metrics[rounds] = Metrics(rounds, warmup_period);
 
-    packets_processed = 0;
-    total_time = 0;
-    data_packets_processed = voice_packets_processed = 0;
-
-    // Last time the data/voice queue changed size
-    last_t1 = last_t2 = 0;
+    if (warmup_period)
+        round_metrics[rounds].start_t = 0;
+    else
+        round_metrics[0].start_t = 0;
 }
 
 void event_queue_init() {
@@ -222,17 +246,16 @@ void event_queue_init() {
 
 void run_simulation(int warmup_period, int rounds, int round_size, double rho, bool interrupt) {
     // Simulation state initialization
-    simulation_state_init(rho);
-
-    // Initialize incremental sums and counters
-    statistics_init();
+    simulation_state_init(warmup_period, rounds, round_size, rho);
 
     // Initialize event queue
     event_queue_init();
 
-    int n = warmup_period + rounds * round_size;
+    // Probably useless
+    int n = 0;
+    // int m = 0;
 
-    while (packets_processed < n) {
+    while (round_metrics[rounds-1].end_t < 0) {
         // Get next event and then remove it from event queue
         Event cur_event = *event_queue.begin();
         event_queue.erase(event_queue.begin());
@@ -242,33 +265,51 @@ void run_simulation(int warmup_period, int rounds, int round_size, double rho, b
 
         // Deal with the event
         if (cur_event.type == ARRIVAL) {
-            metrics_update_queue(cur_event);
+            // New arrivals belong to the current round
+            cur_event.round_id = cur_round;
+            round_metrics[cur_round].update_Nq_sum(cur_event);
             handle_arrival(cur_event, interrupt);
         } else {
-            metrics_update_dispatch(cur_event);
+            round_metrics[cur_round].update_on_dispatch(cur_event);
             serve_next_packet();
+            n++;
+        }
+
+        // Go to the next round, if the current one is finished
+        if (round_metrics[cur_round].end_t >= 0) {
+            cur_round = (cur_round == rounds) ? 0 : cur_round+1;
+            round_metrics[cur_round].start_t = sim_t;
         }
     }
 
-    cout << defaultfloat;
-    cout << (interrupt ? "Com" : "Sem") << " interrupção. ρ₁ = " << rho << endl;
-    cout << fixed << setprecision(6);
-    cout << "E[X₁]:  " << X1/data_packets_processed << endl;
-    cout << "E[W₁]:  " << W1/data_packets_processed << endl;
-    cout << "E[T₁]:  " << T1/data_packets_processed << endl;
-    cout << "E[Nq₁]: " << Nq1/total_time << endl;
-    // cout << "λ₁:     " << (Nq1/total_time) / (W1/data_packets_processed) << endl;
-    // cout << "ρ₁:     " << (Nq1/total_time) / (W1/data_packets_processed) * (X1/data_packets_processed) << endl;
-    // cout << "E[Nq1] = lambda1 * E[W1] = " << (rho/MEAN_DATA_SERVICE_TIME) * (W1/data_packets_processed) << endl;
-    cout << endl;
-    cout << "E[X₂]:  " << X2/voice_packets_processed << endl;
-    cout << "E[W₂]:  " << W2/voice_packets_processed << endl;
-    cout << "E[T₂]:  " << T2/voice_packets_processed << endl;
-    cout << "E[Nq₂]: " << Nq2/total_time << endl;
-    // cout << "λ₂:     " << (Nq2/total_time) / (W2/voice_packets_processed) << endl;
-    // cout << "ρ₂:     " << (Nq2/total_time) / (W2/voice_packets_processed) * (X2/voice_packets_processed) << endl;
-    cout << endl << defaultfloat;
+    auto print_round = [&rounds] (const Metrics &rm, bool warmup=false) {
+        cout << defaultfloat;
+        if (warmup)
+            cout << "Warm-up round";
+        else
+            cout << "Round " << rm.round_id+1 << "/" << rounds;
+        cout << fixed << setprecision(2);
+        cout << " (" << (warmup ? 0 : rm.start_t) << " --> " << rm.end_t << "):\n";
+        cout << fixed << setprecision(6);
+        cout << "E[W1]:    " << setw(15) << left << (rm.W1 ? rm.W1 : 0);
+        cout << "E[W2]:    " << (rm.W2 ? rm.W2 : 0) << endl;
+        cout << "E[X1]:    " << setw(15) << left << (rm.X1 ? rm.X1 : 0);
+        cout << "E[X2]:    " << (rm.X2 ? rm.X2 : 0) << endl;
+        cout << "E[T1]:    " << setw(15) << left << (rm.T1 ? rm.T1 : 0);
+        cout << "E[T2]:    " << (rm.T2 ? rm.T2 : 0) << endl;
+        cout << "E[Nq1]:   " << setw(15) << left << (rm.Nq1 ? rm.Nq1 : 0);
+        cout << "E[Nq2]:   " << (rm.Nq2 ? rm.Nq2 : 0) << endl;
+        cout << "#:        " << rm.packets_processed << endl;
+        cout << "Refused:  " << rm.refused << endl << endl;
+    };
 
+    print_round(round_metrics[rounds], true);
+    for (auto rm: round_metrics) {
+        if (rm.round_id == rounds) continue;
+        print_round(rm);
+    }
+    cout << endl;
+    cout << n << " packets total" << endl;
 }
 
 void handle_arrival(Event &cur_event, bool interrupt) {
@@ -323,7 +364,7 @@ void serve_next_packet() {
     // If someone left the queue and entered the
     // server, update its waiting time
     if (!idle)
-        metrics_update_wait(event_on_server);
+        round_metrics[cur_round].update_W_sum(event_on_server);
 }
 
 void enter_the_server(const Event &event, bool force) {
@@ -353,7 +394,7 @@ void unschedule_data_dispatch() {
 
     assert(it != event_queue.end() && it->type == DISPATCH && it->packet_type == DATA);
 
-    metrics_update_interruption(*it);
+    round_metrics[cur_round].update_on_interruption(*it);
 
     // Update time at which the interrupted packet entered the queue
     event_on_server.queue_t = sim_t;
@@ -439,15 +480,59 @@ Event make_dispatch_from(const Event &event) {
 =            STATISTICS            =
 ==================================*/
 
-void metrics_update_wait(const Event& event) {
+bool Metrics::should_collect(const Event &event) {
+    // Returns true if:
+    // 1) Metrics for this round are not finished
+    // 2) These are not metrics for the warm-up period
+    // 3) The event belongs to this round
+    return end_t < 0 && round_id != (int)round_metrics.size()-1 && round_id == event.round_id;
+}
+
+void Metrics::compute_estimators() {
+    double total_time = end_t - start_t;
+
+    if (data_packets_processed) {
+        T1 /= data_packets_processed;
+        W1 /= data_packets_processed;
+        X1 /= data_packets_processed;
+    } else {
+        T1 = W1 = X1 = 0;
+    }
+    Nq1 /= total_time;
+
+    if (voice_packets_processed) {
+        T2 /= voice_packets_processed;
+        W2 /= voice_packets_processed;
+        X2 /= voice_packets_processed;
+    } else {
+        T2 = W2 = X2 = 0;
+    }
+    Nq2 /= total_time;
+}
+
+// Updates W cumulative sums
+// Should be called only when a packet leaves the queue
+// and enters the server.
+void Metrics::update_W_sum(const Event& event) {
+    if (!should_collect(event)) return;
+
     if (event.packet_type == DATA) {
+        // Because data packets may never leave the system
+        // during the round, a temporary variable is used
         tmpW1 += sim_t - event.queue_t;
     } else {
+        // If a voice packet enters the server,
+        // it cannot be interrupted, thus W2 can
+        // be directly written to
         W2 += sim_t - event.t;
     }
 }
 
-void metrics_update_queue(const Event& event) {
+// Updates the cumulative product Nq x t
+// Should be called on every arrival, dispatch and interruption.
+void Metrics::update_Nq_sum(const Event& event) {
+    if (!should_collect(event)) return;
+
     if (event.packet_type == DATA) {
         Nq1 += (sim_t - last_t1) * data_queue.size();
         last_t1 = sim_t;
@@ -457,8 +542,20 @@ void metrics_update_queue(const Event& event) {
     }
 }
 
-void metrics_update_dispatch(const Event& cur_event) {
-    assert(cur_event.type == DISPATCH);
+// Updates sums on dispatches.
+void Metrics::update_on_dispatch(const Event& cur_event) {
+    assert(cur_event.type == DISPATCH && cur_event.t == sim_t);
+
+    if (!should_collect(cur_event)) {
+        if (round_id == (int)round_metrics.size()-1) {
+            packets_processed++;
+            if (packets_processed == target) {
+                end_t = sim_t;
+            }
+        }
+        refused++;
+        return;
+    }
 
     if (cur_event.packet_type == DATA) {
         data_packets_processed++;
@@ -471,7 +568,7 @@ void metrics_update_dispatch(const Event& cur_event) {
 
         T1 += sim_t - event_on_server.t;
 
-        assert(abs(T1 - W1 - X1) < 1e-3);
+        // assert(abs(T1 - W1 - X1) < 1e-3);
     } else {
         voice_packets_processed++;
 
@@ -479,24 +576,32 @@ void metrics_update_dispatch(const Event& cur_event) {
 
         T2 += sim_t - event_on_server.t;
 
-        assert(abs(T2 - W2 - X2) < 1e-3);
+        // assert(abs(T2 - W2 - X2) < 1e-3);
     }
 
-    metrics_update_queue(cur_event);
+    update_Nq_sum(cur_event);
 
     packets_processed++;
-    total_time = sim_t;
+
+    if (packets_processed == target) {
+        end_t = sim_t;
+        compute_estimators();
+    }
+
 }
 
-void metrics_update_interruption(const Event& event) {
+// Interrupted data packets get 
+void Metrics::update_on_interruption(const Event& event) {
     assert(event.type == DISPATCH && event.packet_type == DATA);
-    
+
+    if (!should_collect(event)) return;
+
     // Update the partial service time for the interrupted data packet
     tmpX1 += event.packet_size / SPEED - (event.t - sim_t);
 
     // Also update the product Nq1 * time for the interrupted data packet,
     // since its return to the queue will increase the queue size
-    metrics_update_queue(event);
+    update_Nq_sum(event);
 }
 
 /*===================================
