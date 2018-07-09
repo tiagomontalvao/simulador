@@ -205,10 +205,9 @@ int main(int argc, char *argv[]) {
 
         run_simulation(warmup_period, rounds, round_size, rho, interrupt);
     } else {
-        exit(-1);
         warmup_period = 5e2;
-        rounds = 1e2;
-        round_size = 1e4;
+        rounds = 50;
+        round_size = 1e5;
         rho = 0.1;
 
         run_simulation(warmup_period, rounds, round_size, rho, false);
@@ -307,6 +306,7 @@ void run_simulation(int warmup_period, int rounds, int round_size, double rho, b
         }
     }
 
+    // #ifdef PYTHON_OUT
     for (auto rm: round_metrics) {
         if (rm.round_id == rounds) continue;
         PRINT(rm.W1);
@@ -321,6 +321,7 @@ void run_simulation(int warmup_period, int rounds, int round_size, double rho, b
         PRINT(rm.Vdelta);
         cout << endl;
     }
+    // #endif
 
     // auto print_metrics = [&rounds] (const Metrics &rm) {
     //     cout << fixed << setprecision(6);
@@ -587,8 +588,8 @@ void Metrics::compute_estimators() {
     }
     Nq1 /= total_time;
 
-    if (delta_intervals) {
-        Vdelta = Delta_sq/(delta_intervals-1) - (Delta*Delta) / (delta_intervals * (delta_intervals-1));
+    if (delta_intervals > 1) {
+        Vdelta = Delta_sq/(delta_intervals-1) - (Delta*Delta) / ((double)delta_intervals * (delta_intervals-1));
         Delta /= delta_intervals;
     } else {
         Delta = Vdelta = 0;

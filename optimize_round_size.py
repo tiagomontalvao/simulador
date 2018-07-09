@@ -17,15 +17,15 @@ if __name__ == "__main__":
 		raise ValueError()
 	
 	warmup = 8000
-	rounds = 100
+	rounds = 10
 	rho = 0.1
 	interrupt = 0
 
 	def next_round_size():
-		k = 5000
+		k = 500
 		for i in range(500):
 			yield int(k)
-			k *= 1.75
+			k *= 1.7
 
 	interrupt_str = "ON" if interrupt else "OFF"
 	print('Parameter: ' + metric + f' (warmup={warmup}, #rounds={rounds}, rho1={rho}, interruption {interrupt_str})')
@@ -43,6 +43,7 @@ if __name__ == "__main__":
 			x.append(dict(zip(metrics, round_means)))
 
 		xs = [xi[metric] for xi in x]
+		print(xs)
 		mean = np.mean(xs)
 		var = np.var(xs, ddof=1)
 
