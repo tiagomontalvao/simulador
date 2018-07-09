@@ -17,7 +17,7 @@ if __name__ == "__main__":
 		raise ValueError()
 	
 	warmup = 8000
-	rounds = 10
+	rounds = 50
 	rho = 0.1
 	interrupt = 0
 
@@ -43,7 +43,6 @@ if __name__ == "__main__":
 			x.append(dict(zip(metrics, round_means)))
 
 		xs = [xi[metric] for xi in x]
-		print(xs)
 		mean = np.mean(xs)
 		var = np.var(xs, ddof=1)
 

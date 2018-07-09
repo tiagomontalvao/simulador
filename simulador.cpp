@@ -100,11 +100,11 @@ private:
 };
 
 Metrics::Metrics(int rnd, int tgt):
-round_id(rnd), target(tgt), start_t(-1), end_t(-1),
-T1(0), W1(0), X1(0), Nq1(0), T2(0), W2(0), X2(0), Nq2(0),
-Delta(0), Delta_sq(0), Vdelta(0), tmpX1(0), tmpW1(0),
-packets_processed(0), data_packets_processed(0),
-voice_packets_processed(0), delta_intervals(0), last_t1(0), last_t2(0) {}
+    round_id(rnd), target(tgt), start_t(-1), end_t(-1),
+    T1(0), W1(0), X1(0), Nq1(0), T2(0), W2(0), X2(0), Nq2(0),
+    Delta(0), Delta_sq(0), Vdelta(0), tmpX1(0), tmpW1(0),
+    packets_processed(0), data_packets_processed(0),
+    voice_packets_processed(0), delta_intervals(0), last_t1(0), last_t2(0) {}
 
 /*=========================================
 =            PROBLEM CONSTANTS            =
