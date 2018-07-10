@@ -220,15 +220,18 @@ int main(int argc, char *argv[]) {
 
         run_simulation(warmup_period, round_size, rho, interrupt);
     } else {
-        warmup_period = 5e3;
-        round_size = 1e5;
+        warmup_period = 1000;
+        round_size = 2900;
+        int warm_no[] = {250, 275, 285, 290, 290, 310, 450};
+        int warm_ys[] = {430, 475, 520, 550, 700, 800, 1000};
         
         for (int i = 1; i < 8; ++i) {
-            run_simulation(warmup_period, round_size, i/10.0, false);
+            run_simulation(warm_no[i-1], round_size, i/10.0, false);
         }
+        cout << endl;
 
         for (int i = 1; i < 8; ++i) {
-            run_simulation(warmup_period, round_size, i/10.0, true);
+            run_simulation(warm_ys[i-1], round_size, i/10.0, true);
         }
     }
 
@@ -366,14 +369,14 @@ bool simulation_should_stop(bool interrupt) {
         precision(partial_results.T2, T2ci.second) <= 0.05 &&
         precision(partial_results.Nq2, Nq2ci.second) <= 0.05) {
 
-        #define print_ci(x) cout << x##ci.first << " " << partial_results.x << " " << x##ci.second << " ";
+        #define print_ci(x) cout << x##ci.first << "," << partial_results.x << "," << x##ci.second << ",";
         print_ci(T1);
         print_ci(W1);
         print_ci(X1);
         print_ci(Nq1);
         print_ci(T2);
         print_ci(W2);
-        print_ci(Nq1);
+        print_ci(Nq2);
         print_ci(Delta);
         print_ci(Vdelta);
         cout << endl;
@@ -403,6 +406,7 @@ void handle_data_arrival(Event &cur_event) {
 
     if (!idle) {
         data_queue.push_back(cur_event);
+        // cout << sim_t << " d " << data_queue.size() << "\n";
     } else {
         enter_the_server(cur_event);
     }
@@ -417,6 +421,7 @@ void handle_voice_arrival(Event &cur_event, bool interrupt) {
         enter_the_server(cur_event);
     } else {
         voice_queue.push_back(cur_event);
+        // cout << sim_t << " v " << voice_queue.size() << "\n";
     }
 }
 
@@ -428,9 +433,11 @@ void serve_next_packet() {
     if (!voice_queue.empty()) {
         enter_the_server(voice_queue.front());
         voice_queue.pop_front();
+        // cout << sim_t << " v " << voice_queue.size() << "\n";
     } else if (!data_queue.empty()) {
         enter_the_server(data_queue.front());
         data_queue.pop_front();
+        // cout << sim_t << " d " << data_queue.size() << "\n";
     }
 
     // If someone left the queue and entered the
@@ -472,6 +479,7 @@ void unschedule_data_dispatch() {
     event_on_server.queue_t = sim_t;
     // Return interrupted data packet to the front of the queue
     data_queue.push_front(event_on_server);
+    // cout << sim_t << " d " << data_queue.size() << "\n";
 
     // Remove it from the event queue
     event_queue.erase(it);
@@ -686,8 +694,6 @@ void Metrics::update_W_sum(const Event& event) {
 // Updates the cumulative product Nq x t
 // Should be called on every arrival, dispatch and interruption.
 void Metrics::update_Nq_sum(const Event& event) {
-    if (!should_collect(event)) return;
-
     if (event.packet_type == DATA) {
         Nq1 += (sim_t - last_t1) * data_queue.size();
         last_t1 = sim_t;
@@ -700,6 +706,8 @@ void Metrics::update_Nq_sum(const Event& event) {
 // Updates sums on dispatches.
 void Metrics::update_on_dispatch(const Event& cur_event) {
     assert(cur_event.type == DISPATCH && cur_event.t == sim_t);
+    
+    update_Nq_sum(cur_event);    
 
     if (!should_collect(cur_event)) {
         // In case this is the warm-up period,
@@ -710,6 +718,8 @@ void Metrics::update_on_dispatch(const Event& cur_event) {
                 end_t = sim_t;
             }
         }
+        tmpX1 = 0;
+        tmpW1 = 0;
         return;
     }
 
@@ -737,8 +747,6 @@ void Metrics::update_on_dispatch(const Event& cur_event) {
         }
     }
 
-    update_Nq_sum(cur_event);
-
     packets_processed++;
 
     if (packets_processed == target) {
@@ -752,14 +760,15 @@ void Metrics::update_on_dispatch(const Event& cur_event) {
 void Metrics::update_on_interruption(const Event& event) {
     assert(event.type == DISPATCH && event.packet_type == DATA);
 
+    // Update Nq1 * time for the interrupted data packet,
+    // since its return to the queue will increase the queue size
+    update_Nq_sum(event);
+
     if (!should_collect(event)) return;
 
     // Update the partial service time for the interrupted data packet
     tmpX1 += event.packet_size / SPEED - (event.t - sim_t);
 
-    // Also update the product Nq1 * time for the interrupted data packet,
-    // since its return to the queue will increase the queue size
-    update_Nq_sum(event);
 }
 
 /*===================================

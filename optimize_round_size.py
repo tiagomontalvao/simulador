@@ -22,13 +22,13 @@ if __name__ == "__main__":
 	sp.run('make clean', shell=True, stdout=devnull)
 	sp.run('make CPPFLAGS="-D PYTHON_SCRIPT"', shell=True, stdout=devnull)
 	
-	warmup = 8000
-	rho = 0.4
-	interrupt = 0
+	warmup = 430
+	rho = 0.1
+	interrupt = 1
 
 	def next_round_size():
-		k = 10
-		for i in range(16):
+		k = 2900
+		for i in range(10):
 			yield int(k)
 			k *= 1.7
 
@@ -54,6 +54,7 @@ if __name__ == "__main__":
 		ic = st.t.interval(0.9, len(xs)-1, scale=np.sqrt(var/len(xs)))
 		prec = ic[1]/mean * 100
 
+		print(xs)
 		print('{:<10} {:<10} {:<14.6f} {:<14.6f} {:<12.6f} ±{:<10.6f}{:>5.2f}%'.format(len(xs), round_size, mean, get_auto_cov(xs, mean), var, ic[1], prec))
 
 	sp.run('make clean', shell=True, stdout=devnull)
