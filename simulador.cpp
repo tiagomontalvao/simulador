@@ -352,8 +352,8 @@ bool simulation_should_stop(bool interrupt) {
     auto Deltaci = get_ci(partial_results.Delta, partial_results.Deltasq, round_metrics.size());
     auto Vdeltaci = get_ci(partial_results.Vdelta, partial_results.Vdeltasq, round_metrics.size());
 
-    // Se tiver estabilidade para a fila de dados,
-    // garantir precisão
+    // If there is stability in data queue,
+    // guarantee precision
     if (!interrupt){
         if (precision(partial_results.W1, W1ci.second) > 0.05 ||
             precision(partial_results.X1, X1ci.second) > 0.05 ||
