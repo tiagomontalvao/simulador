@@ -10,7 +10,10 @@
 #include <string>
 #include <vector>
 
+#include "boost/math/distributions/students_t.hpp"
+
 using namespace std;
+using namespace boost;
 
 /*========================================
 =            TYPE DEFINITIONS            =
@@ -71,8 +74,15 @@ struct Metrics {
     // < 0 if it hasn't stopped
     double end_t;
 
+    // Round unfinished: X holds the sum of Xi's
+    // Round finished: X holds the estimated mean
     double T1, W1, X1, Nq1;
-    double T2, W2, X2, Nq2, Delta, Delta_sq, Vdelta;
+    double T2, W2, Nq2, Delta, Vdelta;
+
+    // Round unfinished: Xsq holds the sum of squared Xi's
+    // Round finished: Xsq holds the estimated second moment
+    double T1sq, W1sq, X1sq, Nq1sq;
+    double T2sq, W2sq, Nq2sq, Deltasq, Vdeltasq;
 
     double tmpX1;
     double tmpW1;
@@ -91,8 +101,8 @@ struct Metrics {
     void update_W_sum(const Event &event);
     void update_on_dispatch(const Event &cur_event);
     void update_on_interruption(const Event &event);
-    Metrics operator+(const Metrics &rhs) const;
-    Metrics operator/(int rhs) const;
+    void compute_mean_var(int n);
+    Metrics& operator+=(const Metrics &rhs);
 
 private:
     bool should_collect(const Event &event);
@@ -101,8 +111,9 @@ private:
 
 Metrics::Metrics(int rnd, int tgt):
 round_id(rnd), target(tgt), start_t(-1), end_t(-1),
-T1(0), W1(0), X1(0), Nq1(0), T2(0), W2(0), X2(0), Nq2(0),
-Delta(0), Delta_sq(0), Vdelta(0), tmpX1(0), tmpW1(0),
+T1(0), W1(0), X1(0), Nq1(0), T2(0), W2(0), Nq2(0), Delta(0), Vdelta(0),
+T1sq(0), W1sq(0), X1sq(0), Nq1sq(0), T2sq(0), W2sq(0), Nq2sq(0),
+Deltasq(0), Vdeltasq(0), tmpX1(0), tmpW1(0),
 packets_processed(0), data_packets_processed(0),
 voice_packets_processed(0), delta_intervals(0), last_t1(0), last_t2(0) {}
 
@@ -136,6 +147,7 @@ int id_counter;
 int cur_round;
 double last_voice_dispatch_t[NO_CHANNELS];
 vector<Metrics> round_metrics;
+Metrics results;
 
 /*===========================================
 =            FUNCTION PROTOTYPES            =
@@ -149,7 +161,8 @@ void statistics_init();
 void event_queue_init();
 /*----------  MAIN  ----------*/
 /*----------  SIMULATION LOGIC  ----------*/
-void run_simulation(int warmup_period, int rounds, int round_size, double rho, bool interrupt);
+void run_simulation(int warmup_period, int round_size, double rho, bool interrupt);
+bool simulation_should_stop(bool interrupt);
 void handle_arrival(Event &cur_event, bool interrupt);
 void handle_data_arrival(Event &cur_event);
 void handle_voice_arrival(Event &cur_event, bool interrupt);
@@ -160,6 +173,9 @@ void unschedule_data_dispatch();
 Event make_arrival_from(const Event &event);
 Event make_dispatch_from(const Event &event);
 /*----------  STATISTICS  ----------*/
+pair<double, double> get_ci(double mu, double var, int n);
+double variance(double sumX, double sumXsq, int n);
+double precision(double center, double ic_U);
 // See class Metrics definition
 /*----------  DEBUG & LOG  ----------*/
 void log (const Event &event, bool verbose=true, const string &prefix = "");
@@ -192,31 +208,29 @@ int get_packet_size() {
 ============================*/
 
 int main(int argc, char *argv[]) {
-    int warmup_period, rounds, round_size, interrupt;
+    int warmup_period, round_size, interrupt;
     double rho;
     ios_base::sync_with_stdio(false);
 
-    if (argc == 6) {
+    if (argc == 5) {
         sscanf(argv[1], "%d", &warmup_period);
-        sscanf(argv[2], "%d", &rounds);
-        sscanf(argv[3], "%d", &round_size);
-        sscanf(argv[4], "%lf", &rho);
-        sscanf(argv[5], "%d", &interrupt);
+        sscanf(argv[2], "%d", &round_size);
+        sscanf(argv[3], "%lf", &rho);
+        sscanf(argv[4], "%d", &interrupt);
 
-        run_simulation(warmup_period, rounds, round_size, rho, interrupt);
+        run_simulation(warmup_period, round_size, rho, interrupt);
     } else {
-        warmup_period = 5e2;
-        rounds = 50;
+        warmup_period = 5e3;
         round_size = 1e5;
-        rho = 0.1;
+        
+        for (int i = 1; i < 8; ++i) {
+            run_simulation(warmup_period, round_size, i/10.0, false);
+        }
 
-        run_simulation(warmup_period, rounds, round_size, rho, false);
+        for (int i = 1; i < 8; ++i) {
+            run_simulation(warmup_period, round_size, i/10.0, true);
+        }
     }
-
-    
-    // for (double rho = 0.1; rho <= 0.71; rho += 0.1) {
-        // run_simulation(warmup_period, rounds, round_size, rho, true);
-    // }
 
     return 0;
 }
@@ -225,7 +239,7 @@ int main(int argc, char *argv[]) {
 =            INITIALIZATION            =
 ======================================*/
 
-void simulation_state_init(int warmup_period, int rounds, int round_size, double rho) {
+void simulation_state_init(int warmup_period, int round_size, double rho) {
     sim_t = 0;
     event_queue.clear();
     data_queue.clear();
@@ -233,20 +247,17 @@ void simulation_state_init(int warmup_period, int rounds, int round_size, double
     idle = true;
     time_between_data_packets = exponential_distribution<double>(rho/MEAN_DATA_SERVICE_TIME);
     id_counter = 0;
+    cur_round = 0;
 
-    // position 'rounds' is for the warmup period
-    cur_round = warmup_period ? rounds : 0;
+    results = Metrics(0, 0);
 
-    round_metrics.resize(rounds+1); // rounds + warmup
-    for (int i = 0; i < rounds; ++i) {
-        round_metrics[i] = Metrics(i, round_size);
-    }
-    round_metrics[rounds] = Metrics(rounds, warmup_period);
-
+    round_metrics.clear();
     if (warmup_period)
-        round_metrics[rounds].start_t = 0;
+        round_metrics.emplace_back(-1, warmup_period);
     else
-        round_metrics[0].start_t = 0;
+        round_metrics.emplace_back(0, round_size);
+
+    round_metrics[0].init();
 }
 
 void event_queue_init() {
@@ -262,19 +273,14 @@ void event_queue_init() {
 =            SIMULATION LOGIC            =
 ========================================*/
 
-#define PRINT(X) cout << #X << " " << X << " ";
-
-void run_simulation(int warmup_period, int rounds, int round_size, double rho, bool interrupt) {
+void run_simulation(int warmup_period, int round_size, double rho, bool interrupt) {
     // Simulation state initialization
-    simulation_state_init(warmup_period, rounds, round_size, rho);
+    simulation_state_init(warmup_period, round_size, rho);
 
     // Initialize event queue
     event_queue_init();
 
-    // Probably useless
-    int n = 0;
-
-    while (round_metrics[rounds-1].end_t < 0) {
+    while (true) {
         // Get next event and then remove it from event queue
         Event cur_event = *event_queue.begin();
         event_queue.erase(event_queue.begin());
@@ -285,7 +291,7 @@ void run_simulation(int warmup_period, int rounds, int round_size, double rho, b
         // Deal with the event
         if (cur_event.type == ARRIVAL) {
             // New arrivals belong to the current round
-            cur_event.round_id = cur_round;
+            cur_event.round_id = round_metrics.back().round_id;
 
             round_metrics[cur_round].update_Nq_sum(cur_event);
             handle_arrival(cur_event, interrupt);
@@ -296,70 +302,86 @@ void run_simulation(int warmup_period, int rounds, int round_size, double rho, b
                 last_voice_dispatch_t[cur_event.channel] = sim_t;
             
             serve_next_packet();
-            n++;
         }
 
         // Go to the next round, if the current one is finished
         if (round_metrics[cur_round].end_t >= 0) {
-            cur_round = (cur_round == rounds) ? 0 : cur_round+1;
+            if (round_metrics[cur_round].round_id == -1) {
+                round_metrics[0] = Metrics(0, round_size);
+            } else {
+                results += round_metrics[cur_round];
+
+                #ifdef PYTHON_SCRIPT
+                #define PRINT(x) cerr << #x << " " << x << " ";
+                auto &rm = round_metrics[cur_round];
+                PRINT(rm.W1);
+                PRINT(rm.X1);
+                PRINT(rm.T1);
+                PRINT(rm.Nq1);
+                PRINT(rm.W2);
+                PRINT(rm.T2);
+                PRINT(rm.Nq2);
+                PRINT(rm.Delta);
+                PRINT(rm.Vdelta);
+                cerr << endl;
+                #endif
+
+                if (simulation_should_stop(interrupt)) break;
+
+                round_metrics.emplace_back(cur_round++, round_size);
+            }
+
+            // Start next round;
             round_metrics[cur_round].init();
         }
     }
+}
 
-    // #ifdef PYTHON_OUT
-    for (auto rm: round_metrics) {
-        if (rm.round_id == rounds) continue;
-        PRINT(rm.W1);
-        PRINT(rm.X1);
-        PRINT(rm.T1);
-        PRINT(rm.Nq1);
-        PRINT(rm.W2);
-        PRINT(rm.X2);
-        PRINT(rm.T2);
-        PRINT(rm.Nq2);
-        PRINT(rm.Delta);
-        PRINT(rm.Vdelta);
-        cout << endl;
+bool simulation_should_stop(bool interrupt) {
+    if (round_metrics.size() < 40) return false;
+    Metrics partial_results(results);
+
+    partial_results.compute_mean_var(round_metrics.size());
+    auto W1ci = get_ci(partial_results.W1, partial_results.W1sq, round_metrics.size());
+    auto X1ci = get_ci(partial_results.X1, partial_results.X1sq, round_metrics.size());
+    auto T1ci = get_ci(partial_results.T1, partial_results.T1sq, round_metrics.size());
+    auto Nq1ci = get_ci(partial_results.Nq1, partial_results.Nq1sq, round_metrics.size());
+    auto W2ci = get_ci(partial_results.W2, partial_results.W2sq, round_metrics.size());
+    auto T2ci = get_ci(partial_results.T2, partial_results.T2sq, round_metrics.size());
+    auto Nq2ci = get_ci(partial_results.Nq2, partial_results.Nq2sq, round_metrics.size());
+    auto Deltaci = get_ci(partial_results.Delta, partial_results.Deltasq, round_metrics.size());
+    auto Vdeltaci = get_ci(partial_results.Vdelta, partial_results.Vdeltasq, round_metrics.size());
+
+    // Se tiver estabilidade para a fila de dados,
+    // garantir precisão
+    if (!interrupt){
+        if (precision(partial_results.W1, W1ci.second) > 0.05 ||
+            precision(partial_results.X1, X1ci.second) > 0.05 ||
+            precision(partial_results.T1, T1ci.second) > 0.05 ||
+            precision(partial_results.Nq1, Nq1ci.second) > 0.05)
+            return false;
     }
-    // #endif
 
-    // auto print_metrics = [&rounds] (const Metrics &rm) {
-    //     cout << fixed << setprecision(6);
-    //     cout << "E[W1]:    " << setw(15) << left << (rm.W1 ? rm.W1 : 0);
-    //     cout << "E[W2]:    " << (rm.W2 ? rm.W2 : 0) << endl;
-    //     cout << "E[X1]:    " << setw(15) << left << (rm.X1 ? rm.X1 : 0);
-    //     cout << "E[X2]:    " << (rm.X2 ? rm.X2 : 0) << endl;
-    //     cout << "E[T1]:    " << setw(15) << left << (rm.T1 ? rm.T1 : 0);
-    //     cout << "E[T2]:    " << (rm.T2 ? rm.T2 : 0) << endl;
-    //     cout << "E[Nq1]:   " << setw(15) << left << (rm.Nq1 ? rm.Nq1 : 0);
-    //     cout << "E[Nq2]:   " << (rm.Nq2 ? rm.Nq2 : 0) << endl;
-    //     cout << defaultfloat;
-    // };
+    if (precision(partial_results.W2, W2ci.second) <= 0.05 &&
+        precision(partial_results.T2, T2ci.second) <= 0.05 &&
+        precision(partial_results.Nq2, Nq2ci.second) <= 0.05) {
 
-    // auto print_round = [&rounds, &print_metrics] (const Metrics &rm, bool warmup=false) {
-    //     cout << defaultfloat;
-    //     if (warmup)
-    //         cout << "Warm-up round";
-    //     else
-    //         cout << "Round " << rm.round_id+1 << "/" << rounds;
-    //     cout << fixed << setprecision(2);
-    //     cout << " (" << rm.start_t << " --> " << rm.end_t << "):\n";
-    //     print_metrics(rm);
-    //     // cout << "#:        " << rm.packets_processed << endl;
-    // };
+        #define print_ci(x) cout << x##ci.first << " " << partial_results.x << " " << x##ci.second << " ";
+        print_ci(T1);
+        print_ci(W1);
+        print_ci(X1);
+        print_ci(Nq1);
+        print_ci(T2);
+        print_ci(W2);
+        print_ci(Nq1);
+        print_ci(Delta);
+        print_ci(Vdelta);
+        cout << endl;
+        
+        return true;
+    }
 
-    // print_round(round_metrics[rounds], true);
-    // for (auto rm: round_metrics) {
-    //     if (rm.round_id == rounds) continue;
-    //     print_round(rm);
-    // }
-    // cout << endl;
-
-    // cout << fixed << setprecision(2);
-    // cout << (interrupt ? "Com" : "Sem") << " interrupção. Rho1 = " << rho << ":" << endl;
-    // print_metrics(accumulate(round_metrics.begin(), round_metrics.end()-1, Metrics(0, 0)) / rounds);
-    // cout << n << " pacotes processados" << endl << endl;
-
+    return false;
 }
 
 void handle_arrival(Event &cur_event, bool interrupt) {
@@ -530,36 +552,64 @@ Event make_dispatch_from(const Event &event) {
 =            STATISTICS            =
 ==================================*/
 
-Metrics Metrics::operator+(const Metrics &b) const {
-    auto a = Metrics(*this);
-    a.T1 += b.T1;
-    a.W1 += b.W1;
-    a.X1 += b.X1;
-    a.Nq1 += b.Nq1;
-    a.T2 += b.T2;
-    a.W2 += b.W2;
-    a.X2 += b.X2;
-    a.Nq2 += b.Nq2;
-    a.Delta += b.Delta;
-    a.Vdelta += b.Vdelta;
+Metrics& Metrics::operator+=(const Metrics &b) {
+    T1 += b.T1;
+    W1 += b.W1;
+    X1 += b.X1;
+    Nq1 += b.Nq1;
+    T2 += b.T2;
+    W2 += b.W2;
+    Nq2 += b.Nq2;
+    Delta += b.Delta;
+    Vdelta += b.Vdelta;
 
-    return a;
+    T1sq += b.T1sq;
+    W1sq += b.W1sq;
+    X1sq += b.X1sq;
+    Nq1sq += b.Nq1sq;
+    T2sq += b.T2sq;
+    W2sq += b.W2sq;
+    Nq2sq += b.Nq2sq;
+    Deltasq += b.Deltasq;
+    Vdeltasq += b.Vdeltasq;
+
+    return *this;
 }
 
-Metrics Metrics::operator/(int b) const {
-    auto a = Metrics(*this);
-    a.T1 /= b;
-    a.W1 /= b;
-    a.X1 /= b;
-    a.Nq1 /= b;
-    a.T2 /= b;
-    a.W2 /= b;
-    a.X2 /= b;
-    a.Nq2 /= b;
-    a.Delta /= b;
-    a.Vdelta /= b;
+pair<double, double> get_ci(double mu, double var, int n) {
+    math::students_t t_dist(n-1);
+    double ci0 = quantile(complement(t_dist, 0.1/2)) * sqrt(var/n);
+    return make_pair(mu - ci0, mu + ci0);
+}
 
-    return a;
+double precision(double center, double ic_U) {
+    return (ic_U-center)/center;
+}
+
+double variance(double sumXsq, double sumX, int n) {
+    return sumXsq/(n-1) - (sumX*sumX)/((double) n * (n-1));
+}
+
+void Metrics::compute_mean_var(int n) {
+    T1sq = variance(T1sq, T1, n);
+    W1sq = variance(W1sq, W1, n);
+    X1sq = variance(X1sq, X1, n);
+    Nq1sq = variance(Nq1sq, Nq1, n);
+    T2sq = variance(T2sq, T2, n);
+    W2sq = variance(W2sq, W2, n);
+    Nq2sq = variance(Nq2sq, Nq2, n);
+    Deltasq = variance(Deltasq, Delta, n);
+    Vdeltasq = variance(Vdeltasq, Vdelta, n);
+
+    T1 /= n;
+    W1 /= n;
+    X1 /= n;
+    Nq1 /= n;
+    T2 /= n;
+    W2 /= n;
+    Nq2 /= n;
+    Delta /= n;
+    Vdelta /= n;
 }
 
 void Metrics::init() {
@@ -573,7 +623,7 @@ bool Metrics::should_collect(const Event &event) {
     // 1) Metrics for this round are not finished
     // 2) These are not metrics for the warm-up period
     // 3) The event belongs to this round
-    return end_t < 0 && round_id != (int)round_metrics.size()-1 && round_id == event.round_id;
+    return end_t < 0 && round_id != -1 && round_id == event.round_id;
 }
 
 void Metrics::compute_estimators() {
@@ -589,7 +639,7 @@ void Metrics::compute_estimators() {
     Nq1 /= total_time;
 
     if (delta_intervals > 1) {
-        Vdelta = Delta_sq/(delta_intervals-1) - (Delta*Delta) / ((double)delta_intervals * (delta_intervals-1));
+        Vdelta = Deltasq/(delta_intervals-1) - (Delta*Delta) / ((double)delta_intervals * (delta_intervals-1));
         Delta /= delta_intervals;
     } else {
         Delta = Vdelta = 0;
@@ -598,11 +648,21 @@ void Metrics::compute_estimators() {
     if (voice_packets_processed) {
         T2 /= voice_packets_processed;
         W2 /= voice_packets_processed;
-        X2 /= voice_packets_processed;
     } else {
-        T2 = W2 = X2 = 0;
+        T2 = W2 = 0;
     }
     Nq2 /= total_time;
+
+    // The square of each metric should also be stored
+    T1sq = T1 * T1;
+    W1sq = W1 * W1;
+    X1sq = X1 * X1;
+    Nq1sq = Nq1 * Nq1;
+    T2sq = T2 * T2;
+    W2sq = W2 * W2;
+    Nq2sq = Nq2 * Nq2;
+    Deltasq = Delta * Delta;
+    Vdeltasq = Vdelta * Vdelta;
 }
 
 // Updates W cumulative sums
@@ -644,7 +704,7 @@ void Metrics::update_on_dispatch(const Event& cur_event) {
     if (!should_collect(cur_event)) {
         // In case this is the warm-up period,
         // count every packet so the round can finish
-        if (round_id == (int)round_metrics.size()-1) {
+        if (round_id < 0) {
             packets_processed++;
             if (packets_processed == target) {
                 end_t = sim_t;
@@ -667,14 +727,12 @@ void Metrics::update_on_dispatch(const Event& cur_event) {
     } else {
         voice_packets_processed++;
 
-        X2 += VOICE_SERVICE_TIME;
-
         T2 += sim_t - event_on_server.t;
 
         if (cur_event.vgroup_idx > 0) {
             double Dj = sim_t - last_voice_dispatch_t[cur_event.channel];
             Delta += Dj;
-            Delta_sq += Dj * Dj;
+            Deltasq += Dj * Dj;
             delta_intervals++;
         }
     }

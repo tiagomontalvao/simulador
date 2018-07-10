@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import subprocess as sp
 import numpy as np
 import scipy.stats as st
@@ -15,27 +16,31 @@ if __name__ == "__main__":
 		metric = argv[1]
 	except:
 		raise ValueError()
+
+	devnull = open(os.devnull, 'w')
+
+	sp.run('make clean', shell=True, stdout=devnull)
+	sp.run('make CPPFLAGS="-D PYTHON_SCRIPT"', shell=True, stdout=devnull)
 	
-	warmup = 8000
-	rounds = 10
-	rho = 0.1
+	warmup = 1e4
+	rho = 0.4
 	interrupt = 0
 
 	def next_round_size():
-		k = 500
-		for i in range(500):
+		k = 10
+		for i in range(16):
 			yield int(k)
 			k *= 1.7
 
 	interrupt_str = "ON" if interrupt else "OFF"
-	print('Parameter: ' + metric + f' (warmup={warmup}, #rounds={rounds}, rho1={rho}, interruption {interrupt_str})')
-	print('{:<10} {:<14} {:<14} {:<12} {:<10} {:^5}'.format('Round size', 'Mean', 'Autocovariance', 'Variance', 'IC', 'Prec'))
+	print('Parameter: ' + metric + f' (warmup={warmup}, rho1={rho}, interruption {interrupt_str})')
+	print('{:<10} {:<10} {:<14} {:<14} {:<12} {:<10} {:^5}'.format('Rounds', 'Round size', 'Mean', 'Autocovariance', 'Variance', 'IC', 'Prec'))
 	for round_size in next_round_size():
 		acc_avg = dict()
-		op = sp.run('/home/renato/Desktop/simulador/simulador {} {} {} {} {}'.format(warmup, rounds, round_size, rho, interrupt), stdout=sp.PIPE, shell=True, check=True)
+		op = sp.run('/home/renato/Desktop/simulador/simulador {} {} {} {}'.format(warmup, round_size, rho, interrupt), stderr=sp.PIPE, stdout=devnull, shell=True, check=True)
 
 		x = []
-		for line in op.stdout.decode('utf8').strip().split('\n'):
+		for line in op.stderr.decode('utf8').strip().split('\n'):
 			round_info = line.split()
 			metrics = [round_info[i].replace("rm.", "") for i in range(0, len(round_info), 2)]
 			round_means = [float(round_info[i]) for i in range(1, len(round_info), 2)]
@@ -43,15 +48,15 @@ if __name__ == "__main__":
 			x.append(dict(zip(metrics, round_means)))
 
 		xs = [xi[metric] for xi in x]
-		print(xs)
 		mean = np.mean(xs)
 		var = np.var(xs, ddof=1)
 
-		ic = st.t.interval(0.9, len(xs)-1, scale=np.sqrt(var))
+		ic = st.t.interval(0.9, len(xs)-1, scale=np.sqrt(var/len(xs)))
+		# ic = st.t.ppf(0.95, len(xs)-1) * np.sqrt(var/len(xs))
+		# ic = (-ic, ic)
 		prec = ic[1]/mean * 100
 
-		print('{:<10} {:<14.6f} {:<14.6f} {:<12.6f} ±{:<10.6f}{:>5.2f}%'.format(round_size, mean, get_auto_cov(xs, mean), var, ic[1], prec))
+		# print('{:.6f}'.format(np.sqrt(var/len(xs))))
+		print('{:<10} {:<10} {:<14.6f} {:<14.6f} {:<12.6f} ±{:<10.6f}{:>5.2f}%'.format(len(xs), round_size, mean, get_auto_cov(xs, mean), var, ic[1], prec))
 
-		if (prec <= 5.0): break
-
-
+	sp.run('make clean', shell=True, stdout=devnull)

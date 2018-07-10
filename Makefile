@@ -1,6 +1,6 @@
 CXX=g++
 RM=rm -f
-CPPFLAGS=-Wall -std=c++11
+override CPPFLAGS+=-Wall -std=c++11 -Imath/include/
 
 SRCS=simulador.cpp
 OUT=simulador
