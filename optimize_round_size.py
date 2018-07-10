@@ -22,7 +22,7 @@ if __name__ == "__main__":
 	sp.run('make clean', shell=True, stdout=devnull)
 	sp.run('make CPPFLAGS="-D PYTHON_SCRIPT"', shell=True, stdout=devnull)
 	
-	warmup = 1e4
+	warmup = 8000
 	rho = 0.4
 	interrupt = 0
 
@@ -52,11 +52,8 @@ if __name__ == "__main__":
 		var = np.var(xs, ddof=1)
 
 		ic = st.t.interval(0.9, len(xs)-1, scale=np.sqrt(var/len(xs)))
-		# ic = st.t.ppf(0.95, len(xs)-1) * np.sqrt(var/len(xs))
-		# ic = (-ic, ic)
 		prec = ic[1]/mean * 100
 
-		# print('{:.6f}'.format(np.sqrt(var/len(xs))))
 		print('{:<10} {:<10} {:<14.6f} {:<14.6f} {:<12.6f} ±{:<10.6f}{:>5.2f}%'.format(len(xs), round_size, mean, get_auto_cov(xs, mean), var, ic[1], prec))
 
 	sp.run('make clean', shell=True, stdout=devnull)
