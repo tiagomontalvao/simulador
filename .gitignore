@@ -2,4 +2,7 @@ simulador
 simulador.exe
 simulador_dbg
 simulador_dbg.exe
-math/*
+*/
+*.txt
+*.ipynb
+

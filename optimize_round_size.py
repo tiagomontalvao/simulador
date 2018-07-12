@@ -22,9 +22,9 @@ if __name__ == "__main__":
 	# sp.run('make clean', shell=True, stdout=devnull)
 	sp.run('make CPPFLAGS="-D PYTHON_SCRIPT"', shell=True, stdout=devnull)
 	
-	warmup = 430
-	rho = 0.1
-	interrupt = 0
+	warmup = 20000
+	rho = 0.4
+	interrupt = 1
 
 	def next_round_size():
 		k = 2900
@@ -37,7 +37,7 @@ if __name__ == "__main__":
 	print('{:<10} {:<10} {:<14} {:<14} {:<12} {:<10} {:^5}'.format('Rounds', 'Round size', 'Mean', 'Autocovariance', 'Variance', 'IC', 'Prec'))
 	for round_size in next_round_size():
 		acc_avg = dict()
-		op = sp.run('/home/renato/Desktop/simulador/simulador {} {} {} {}'.format(warmup, round_size, rho, interrupt), stderr=sp.PIPE, stdout=devnull, shell=True, check=True)
+		op = sp.run('./simulador {} {} {} {}'.format(warmup, round_size, rho, interrupt), stderr=sp.PIPE, stdout=devnull, shell=True, check=True)
 
 		x = []
 		for line in op.stderr.decode('utf8').strip().split('\n'):
