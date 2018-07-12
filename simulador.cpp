@@ -176,7 +176,7 @@ Event make_dispatch_from(const Event &event);
 pair<double, double> get_ci(double mu, double var, int n);
 double variance(double sumX, double sumXsq, int n);
 double precision(double center, double ic_U);
-// See class Metrics definition
+// See class Metrics declaration
 /*----------  DEBUG & LOG  ----------*/
 void log (const Event &event, bool verbose=true, const string &prefix = "");
 void dbg_show_queue(bool verbose=true);
@@ -220,18 +220,16 @@ int main(int argc, char *argv[]) {
 
         run_simulation(warmup_period, round_size, rho, interrupt);
     } else {
-        warmup_period = 1000;
-        round_size = 2900;
-        int warm_no[] = {250, 275, 285, 290, 290, 310, 450};
-        int warm_ys[] = {430, 475, 520, 550, 700, 800, 1000};
+        warmup_period = 10000;
+        round_size = 10000;
         
         for (int i = 1; i < 8; ++i) {
-            run_simulation(warm_no[i-1], round_size, i/10.0, false);
+            run_simulation(warmup_period, round_size, i/10.0, false);
         }
         cout << endl;
 
         for (int i = 1; i < 8; ++i) {
-            run_simulation(warm_ys[i-1], round_size, i/10.0, true);
+            run_simulation(warmup_period, round_size, i/10.0, true);
         }
     }
 
@@ -301,8 +299,9 @@ void run_simulation(int warmup_period, int round_size, double rho, bool interrup
         } else {
             round_metrics[cur_round].update_on_dispatch(cur_event);
             
-            if (cur_event.packet_type == VOICE)
+            if (cur_event.packet_type == VOICE) {
                 last_voice_dispatch_t[cur_event.channel] = sim_t;
+            }
             
             serve_next_packet();
         }
@@ -341,7 +340,7 @@ void run_simulation(int warmup_period, int round_size, double rho, bool interrup
 }
 
 bool simulation_should_stop(bool interrupt) {
-    if (round_metrics.size() < 40) return false;
+    if (round_metrics.size() < 3) return false;
     Metrics partial_results(results);
 
     partial_results.compute_mean_var(round_metrics.size());
@@ -355,8 +354,8 @@ bool simulation_should_stop(bool interrupt) {
     auto Deltaci = get_ci(partial_results.Delta, partial_results.Deltasq, round_metrics.size());
     auto Vdeltaci = get_ci(partial_results.Vdelta, partial_results.Vdeltasq, round_metrics.size());
 
-    // If there is stability in data queue,
-    // guarantee precision
+    // Se tiver estabilidade para a fila de dados,
+    // garantir precisão
     if (!interrupt){
         if (precision(partial_results.W1, W1ci.second) > 0.05 ||
             precision(partial_results.X1, X1ci.second) > 0.05 ||
@@ -406,7 +405,6 @@ void handle_data_arrival(Event &cur_event) {
 
     if (!idle) {
         data_queue.push_back(cur_event);
-        // cout << sim_t << " d " << data_queue.size() << "\n";
     } else {
         enter_the_server(cur_event);
     }
@@ -421,7 +419,6 @@ void handle_voice_arrival(Event &cur_event, bool interrupt) {
         enter_the_server(cur_event);
     } else {
         voice_queue.push_back(cur_event);
-        // cout << sim_t << " v " << voice_queue.size() << "\n";
     }
 }
 
@@ -433,11 +430,9 @@ void serve_next_packet() {
     if (!voice_queue.empty()) {
         enter_the_server(voice_queue.front());
         voice_queue.pop_front();
-        // cout << sim_t << " v " << voice_queue.size() << "\n";
     } else if (!data_queue.empty()) {
         enter_the_server(data_queue.front());
         data_queue.pop_front();
-        // cout << sim_t << " d " << data_queue.size() << "\n";
     }
 
     // If someone left the queue and entered the
@@ -479,7 +474,6 @@ void unschedule_data_dispatch() {
     event_on_server.queue_t = sim_t;
     // Return interrupted data packet to the front of the queue
     data_queue.push_front(event_on_server);
-    // cout << sim_t << " d " << data_queue.size() << "\n";
 
     // Remove it from the event queue
     event_queue.erase(it);
