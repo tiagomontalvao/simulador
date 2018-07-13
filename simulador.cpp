@@ -111,7 +111,7 @@ struct FinalMetrics {
     Metrics sum;
     Metrics sum_of_squares;
     Metrics mean;
-    Metrics ci_half_size;
+    Metrics ci_halfwidth;
     Metrics precision;
 
     FinalMetrics();
@@ -210,7 +210,7 @@ int get_packet_size() {
 int main(int argc, char *argv[]) {
     ios_base::sync_with_stdio(false);
 
-    string mt_state_filename = "mt_state.sav";
+    const string mt_state_filename = "mt_state.sav";
     ifstream mt_state_r(mt_state_filename, ios::in | ios::binary);
 
     if (mt_state_r.good()) {
@@ -672,8 +672,8 @@ bool FinalMetrics::has_enough_precision(bool interrupt) {
         double var = variance(sum[param], sum_of_squares[param], num_samples);
         
         mean[param] = sum[param] / num_samples;
-        ci_half_size[param] = t_ppf * sqrt(var/num_samples);
-        precision[param] = ci_half_size[param] / mean[param];
+        ci_halfwidth[param] = t_ppf * sqrt(var/num_samples);
+        precision[param] = ci_halfwidth[param] / mean[param];
     }
 
     // If there are no interruptions, check if precisions
@@ -694,7 +694,7 @@ bool FinalMetrics::has_enough_precision(bool interrupt) {
 }
 
 void FinalMetrics::show() {
-    #define show_param(x) cout << mean[x] - ci_half_size[x] << "," << mean[x] << "," << mean[x] + ci_half_size[x] << ",";
+    #define show_param(x) cout << mean[x] - ci_halfwidth[x] << "," << mean[x] << "," << mean[x] + ci_halfwidth[x] << ",";
 
     cout << fixed << setprecision(4);
     show_param("ET1");
