@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <deque>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <random>
@@ -209,6 +210,14 @@ int get_packet_size() {
 int main(int argc, char *argv[]) {
     ios_base::sync_with_stdio(false);
 
+    string mt_state_filename = "mt_state.sav";
+    ifstream mt_state_r(mt_state_filename, ios::in | ios::binary);
+
+    if (mt_state_r.good()) {
+        mt_state_r >> mt;
+        mt_state_r.close();
+    }
+
     int warmup_period, round_size, interrupt;
     double rho;
 
@@ -221,7 +230,7 @@ int main(int argc, char *argv[]) {
         run_simulation(warmup_period, round_size, rho, interrupt);
     } else {
         warmup_period = 10000;
-        round_size = 12000;
+        round_size = 15000;
         
         for (int i = 1; i < 8; ++i) {
             run_simulation(warmup_period, round_size, i/10.0, false);
@@ -232,6 +241,10 @@ int main(int argc, char *argv[]) {
             run_simulation(warmup_period, round_size, i/10.0, true);
         }
     }
+
+    ofstream mt_state_w(mt_state_filename, ios::out | ios::binary);
+    mt_state_w << mt;
+    mt_state_w.close();
 
     return 0;
 }
@@ -317,7 +330,7 @@ void run_simulation(int warmup_period, int round_size, double rho, bool interrup
                 if (results.has_enough_precision(interrupt))
                     break;
 
-                // Create a new round if 
+                // Create a new round if simulation didn't stop
                 round_metrics.emplace_back(cur_round++, round_size);
             }
 
@@ -578,7 +591,7 @@ void RoundMetrics::update_on_departure(const Event& cur_event) {
 
         sum["T1"] += sim_t - event_on_server.t;
 
-        sum["W1"] += sim_t - event_on_server.t - (cur_event.packet_size/SPEED + tmpX1);
+        sum["W1"] += sim_t - event_on_server.t - (cur_event.packet_size / SPEED + tmpX1);
 
     } else {
         voice_packets_processed++;
@@ -606,7 +619,8 @@ void RoundMetrics::update_on_departure(const Event& cur_event) {
 
 }
 
-// Interrupted data packets get 
+// Interrupted data packets get partial service times and change
+// data queue size
 void RoundMetrics::update_on_interruption(const Event& event) {
     assert(event.type == DEPARTURE && event.packet_type == DATA);
 
@@ -623,6 +637,7 @@ void RoundMetrics::update_on_interruption(const Event& event) {
 
 void FinalMetrics::add_metrics(const RoundMetrics &round_metrics) {
     assert(round_metrics.end_t >= 0);
+    num_samples++;
 
     for (auto const &it: round_metrics.param) {
         sum[it.first] += it.second;
@@ -631,39 +646,45 @@ void FinalMetrics::add_metrics(const RoundMetrics &round_metrics) {
         #ifdef PYTHON_SCRIPT
         cerr << it.first << " " << it.second << " ";
         #endif
+
+        // if (it.first[it.first.size()-1] != '1') {
+        //     cout << fixed << setprecision(5);
+        //     cout << it.first << " " << sum[it.first]/num_samples << " ";
+        // }
     }
+
+    // cout << endl;
 
     #ifdef PYTHON_SCRIPT
     cerr << endl;
     #endif
 
-    num_samples++;
 }
 
 bool FinalMetrics::has_enough_precision(bool interrupt) {
-    if (num_samples < 25) return false;
+    if (num_samples < 8) return false;
     
     // Compute confidence intervals for each parameter
     math::students_t t_dist(num_samples-1);
+    double t_ppf = quantile(complement(t_dist, 0.1/2));
     for (auto const &it: sum) {
         auto const &param = it.first;
         double var = variance(sum[param], sum_of_squares[param], num_samples);
         
         mean[param] = sum[param] / num_samples;
-        ci_half_size[param] = quantile(complement(t_dist, 0.1/2)) * sqrt(var/num_samples);
+        ci_half_size[param] = t_ppf * sqrt(var/num_samples);
         precision[param] = ci_half_size[param] / mean[param];
     }
 
     // If there are no interruptions, check if precisions
-    // for the data channel parameters are okay
+    // for the data channel parameters are okay (except E[X1])
     if (!interrupt) {
-        if (precision["EW1"] > 0.05 ||
-            precision["ET1"] > 0.05 || precision["ENq1"] > 0.05) {
+        if (precision["EW1"] > 0.05 || precision["ET1"] > 0.05 || precision["ENq1"] > 0.05) {
             return false;
         }
     }
 
-    // Check if precisions for the voice channels are okay
+    // Check if precisions for the voice channels (and E[X1]) parameters are okay
     if (precision["EW2"] <= 0.05 && precision["ET2"] <= 0.05 && precision["ENq2"] <= 0.05 && precision["EX1"] <= 0.05) {
         show();
         return true;
@@ -673,7 +694,7 @@ bool FinalMetrics::has_enough_precision(bool interrupt) {
 }
 
 void FinalMetrics::show() {
-    #define show_param(x) cout << mean[x] - ci_half_size[x] << " " << mean[x] << " " << mean[x] + ci_half_size[x] << " ";
+    #define show_param(x) cout << mean[x] - ci_half_size[x] << "," << mean[x] << "," << mean[x] + ci_half_size[x] << ",";
 
     cout << fixed << setprecision(4);
     show_param("ET1");
