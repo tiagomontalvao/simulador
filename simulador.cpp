@@ -96,7 +96,6 @@ struct RoundMetrics {
     void update_on_interruption(const Event &event);
 
 private:
-    bool should_collect(const Event &event);
     void compute_estimators();
 };
 
@@ -107,6 +106,7 @@ RoundMetrics::RoundMetrics(int rnd, int tgt):
 
 struct FinalMetrics {
     int num_samples;
+    bool precision_achieved;
 
     Metrics sum;
     Metrics sum_of_squares;
@@ -116,11 +116,10 @@ struct FinalMetrics {
 
     FinalMetrics();
     void add_metrics(const RoundMetrics &round_metrics);
-    bool has_enough_precision(bool interrupt);
     void show();
 };
 
-FinalMetrics::FinalMetrics(): num_samples(0) {}
+FinalMetrics::FinalMetrics(): num_samples(0), precision_achieved(false) {}
 
 /*=========================================
 =            PROBLEM CONSTANTS            =
@@ -148,7 +147,9 @@ deque<Event> data_queue;
 deque<Event> voice_queue;
 Event event_on_server;
 bool idle;
+bool interrupt;
 int id_counter;
+int num_arrivals;
 int cur_round;
 double last_voice_departure_t[NUM_CHANNELS];
 vector<RoundMetrics> round_metrics;
@@ -161,12 +162,11 @@ FinalMetrics results;
 /*----------  RANDOM NUMBER GENERATION SETUP  ----------*/
 int get_packet_size();
 /*----------  INITIALIZATION  ----------*/
-void simulation_state_init(int warmup_period, int round_size, double rho);
+void simulation_state_init(int warmup_period, int round_size, double rho, bool interrupt_flag);
 void event_queue_init();
 /*----------  MAIN  ----------*/
 /*----------  SIMULATION LOGIC  ----------*/
 void run_simulation(int warmup_period, int round_size, double rho, bool interrupt);
-bool simulation_should_stop(bool interrupt);
 void handle_arrival(Event &cur_event, bool interrupt);
 void handle_data_arrival(Event &cur_event);
 void handle_voice_arrival(Event &cur_event, bool interrupt);
@@ -253,25 +253,21 @@ int main(int argc, char *argv[]) {
 =            INITIALIZATION            =
 ======================================*/
 
-void simulation_state_init(int warmup_period, int round_size, double rho) {
+void simulation_state_init(int warmup_period, int round_size, double rho, bool interrupt_flag) {
     sim_t = 0;
     event_queue.clear();
     data_queue.clear();
     voice_queue.clear();
     idle = true;
+    interrupt = interrupt_flag;
     time_between_data_packets = exponential_distribution<double>(rho/MEAN_DATA_SERVICE_TIME);
     id_counter = 0;
-    cur_round = 0;
+    num_arrivals = 0;
 
     results = FinalMetrics();
 
     round_metrics.clear();
-    if (warmup_period)
-        round_metrics.emplace_back(-1, warmup_period);
-    else
-        round_metrics.emplace_back(0, round_size);
-
-    round_metrics[0].init();
+    cur_round = -1;
 }
 
 void event_queue_init() {
@@ -289,12 +285,12 @@ void event_queue_init() {
 
 void run_simulation(int warmup_period, int round_size, double rho, bool interrupt) {
     // Simulation state initialization
-    simulation_state_init(warmup_period, round_size, rho);
+    simulation_state_init(warmup_period, round_size, rho, interrupt);
 
     // Initialize event queue
     event_queue_init();
 
-    while (true) {
+    while (!results.precision_achieved) {
         // Get next event and then remove it from event queue
         Event cur_event = *event_queue.begin();
         event_queue.erase(event_queue.begin());
@@ -304,10 +300,29 @@ void run_simulation(int warmup_period, int round_size, double rho, bool interrup
 
         // Deal with the event
         if (cur_event.type == ARRIVAL) {
-            round_metrics[cur_round].update_Nq_sum(cur_event);
+            if ((num_arrivals - warmup_period) / round_size == cur_round + 1) {
+                if (cur_round != -1)
+                    round_metrics[cur_round].end_t = sim_t;
+                cur_round++;
+                
+                round_metrics.emplace_back(cur_round, round_size);
+                round_metrics[cur_round].init();
+            }
+
+            cur_event.round_id = cur_round;
+            num_arrivals++;
+
+            if (cur_round != -1)
+                round_metrics[cur_round].update_Nq_sum(cur_event);
+
             handle_arrival(cur_event, interrupt);
         } else {
-            round_metrics[cur_round].update_on_departure(cur_event);
+
+            if (cur_round != -1)
+                round_metrics[cur_round].update_Nq_sum(cur_event);
+
+            if (cur_event.round_id != -1)
+                round_metrics[cur_event.round_id].update_on_departure(cur_event);
             
             if (cur_event.packet_type == VOICE) {
                 last_voice_departure_t[cur_event.channel] = sim_t;
@@ -316,27 +331,7 @@ void run_simulation(int warmup_period, int round_size, double rho, bool interrup
             serve_next_packet();
         }
 
-        // Go to the next round, if the current one is finished
-        if (round_metrics[cur_round].end_t >= 0) {
-            // If this is the warm-up period ending,
-            // start the actual first run
-            if (round_metrics[cur_round].round_id == -1) {
-                round_metrics[0] = RoundMetrics(0, round_size);
-            } else {
-                // Add this run's measurements to final results
-                results.add_metrics(round_metrics[cur_round]);
 
-                // Stop simulation if the required precision has been achieved
-                if (results.has_enough_precision(interrupt))
-                    break;
-
-                // Create a new round if simulation didn't stop
-                round_metrics.emplace_back(cur_round++, round_size);
-            }
-
-            // Initialize next round
-            round_metrics[cur_round].init();
-        }
     }
 }
 
@@ -417,7 +412,11 @@ void unschedule_data_departure() {
 
     assert(it != event_queue.end() && it->type == DEPARTURE && it->packet_type == DATA);
 
-    round_metrics[cur_round].update_on_interruption(*it);
+    if (cur_round != -1)
+        round_metrics[cur_round].update_Nq_sum(*it);
+
+    if (it->round_id != -1)
+        round_metrics[it->round_id].update_on_interruption(*it);
 
     // Return interrupted data packet to the front of the queue
     data_queue.push_front(event_on_server);
@@ -510,14 +509,6 @@ void RoundMetrics::init() {
     last_t1 = last_t2 = sim_t;
 }
 
-bool RoundMetrics::should_collect(const Event &event) {
-    // Returns true if:
-    // 1) Metrics for this round are not finished
-    // 2) These are not metrics for the warm-up period
-    // 3) The event belongs to this round
-    return end_t < 0 && round_id != -1; // && round_id == event.round_id;
-}
-
 // Once the round is finished, the parameters estimators
 // must be evaluated
 void RoundMetrics::compute_estimators() {
@@ -552,6 +543,7 @@ void RoundMetrics::compute_estimators() {
         param["VDelta"] = 0;
     }
 
+    results.add_metrics(*this);
 }
 
 // Updates the cumulative product Nq x Δt
@@ -569,19 +561,6 @@ void RoundMetrics::update_Nq_sum(const Event& event) {
 // Updates sums on departures.
 void RoundMetrics::update_on_departure(const Event& cur_event) {
     assert(cur_event.type == DEPARTURE && cur_event.t == sim_t);
-    
-    update_Nq_sum(cur_event);
-
-    if (!should_collect(cur_event)) {
-        // In case this is the warm-up period, count every 
-        // packet so that the warm-up period can finish
-        if (round_id < 0) {
-            packets_processed++;
-            if (packets_processed == target)
-                end_t = sim_t;
-        }
-        return;
-    }
 
     if (cur_event.packet_type == DATA) {
         data_packets_processed++;
@@ -613,7 +592,6 @@ void RoundMetrics::update_on_departure(const Event& cur_event) {
     packets_processed++;
 
     if (packets_processed == target) {
-        end_t = sim_t;
         compute_estimators();
     }
 
@@ -623,12 +601,6 @@ void RoundMetrics::update_on_departure(const Event& cur_event) {
 // data queue size
 void RoundMetrics::update_on_interruption(const Event& event) {
     assert(event.type == DEPARTURE && event.packet_type == DATA);
-
-    // Update Nq1 * time for the interrupted data packet,
-    // since its return to the queue will increase the queue size
-    update_Nq_sum(event);
-
-    if (!should_collect(event)) return;
 
     // Update the partial service time for the interrupted data packet
     tmpX1 += event.packet_size / SPEED - (event.t - sim_t);
@@ -640,11 +612,21 @@ void FinalMetrics::add_metrics(const RoundMetrics &round_metrics) {
     num_samples++;
 
     for (auto const &it: round_metrics.param) {
-        sum[it.first] += it.second;
-        sum_of_squares[it.first] += it.second * it.second;
+        auto const &param = it.first;
+
+        sum[param] += it.second;
+        sum_of_squares[param] += it.second * it.second;
+
+        if (num_samples < 8) continue;
+
+        math::students_t t_dist(num_samples-1);
+        double var = variance(sum[param], sum_of_squares[param], num_samples);
+        mean[param] = sum[param] / num_samples;
+        ci_halfwidth[param] = quantile(complement(t_dist, 0.1/2)) * sqrt(var/num_samples);
+        precision[param] = ci_halfwidth[param] / mean[param];
 
         #ifdef PYTHON_SCRIPT
-        cerr << it.first << " " << it.second << " ";
+        cerr << param << " " << it.second << " ";
         #endif
 
         // if (it.first[it.first.size()-1] != '1') {
@@ -659,38 +641,21 @@ void FinalMetrics::add_metrics(const RoundMetrics &round_metrics) {
     cerr << endl;
     #endif
 
-}
-
-bool FinalMetrics::has_enough_precision(bool interrupt) {
-    if (num_samples < 8) return false;
-    
-    // Compute confidence intervals for each parameter
-    math::students_t t_dist(num_samples-1);
-    double t_ppf = quantile(complement(t_dist, 0.1/2));
-    for (auto const &it: sum) {
-        auto const &param = it.first;
-        double var = variance(sum[param], sum_of_squares[param], num_samples);
-        
-        mean[param] = sum[param] / num_samples;
-        ci_halfwidth[param] = t_ppf * sqrt(var/num_samples);
-        precision[param] = ci_halfwidth[param] / mean[param];
-    }
+    if (num_samples < 8) return;
 
     // If there are no interruptions, check if precisions
     // for the data channel parameters are okay (except E[X1])
     if (!interrupt) {
         if (precision["EW1"] > 0.05 || precision["ET1"] > 0.05 || precision["ENq1"] > 0.05) {
-            return false;
+            return;
         }
     }
 
     // Check if precisions for the voice channels (and E[X1]) parameters are okay
     if (precision["EW2"] <= 0.05 && precision["ET2"] <= 0.05 && precision["ENq2"] <= 0.05 && precision["EX1"] <= 0.05) {
         show();
-        return true;
+        precision_achieved = true;
     }
-
-    return false;
 }
 
 void FinalMetrics::show() {
