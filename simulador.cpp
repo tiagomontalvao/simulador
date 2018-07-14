@@ -101,9 +101,9 @@ private:
 };
 
 RoundMetrics::RoundMetrics(int rnd, int tgt):
-round_id(rnd), target(tgt), start_t(-1), end_t(-1),
-tmpX1(0), packets_processed(0), data_packets_processed(0),
-voice_packets_processed(0), delta_intervals(0), last_t1(0), last_t2(0) {}
+    round_id(rnd), target(tgt), start_t(-1), end_t(-1),
+    tmpX1(0), packets_processed(0), data_packets_processed(0),
+    voice_packets_processed(0), delta_intervals(0), last_t1(0), last_t2(0) {}
 
 struct FinalMetrics {
     int num_samples;
