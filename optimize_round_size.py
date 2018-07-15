@@ -22,13 +22,13 @@ if __name__ == "__main__":
 	# sp.run('make clean', shell=True, stdout=devnull)
 	sp.run('make CPPFLAGS="-D PYTHON_SCRIPT"', shell=True, stdout=devnull)
 	
-	warmup = 20000
+	warmup = 10000
 	rho = 0.4
-	interrupt = 1
+	interrupt = 0
 
 	def next_round_size():
-		k = 2900
-		for i in range(10):
+		k = 15000
+		for i in range(1):
 			yield int(k)
 			k *= 1.7
 
