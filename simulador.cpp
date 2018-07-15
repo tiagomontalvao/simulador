@@ -652,13 +652,13 @@ bool FinalMetrics::have_enough_precision() {
     // If there are no interruptions, check if precisions
     // for the data channel parameters are okay (except E[X1])
     if (!interrupt) {
-        if (precision["EW1"] > 0.05 && precision["ET1"] > 0.05 && precision["ENq1"] > 0.05) {
+        if (precision["EW1"] > 0.05 && precision["ET1"] > 0.05 && precision["ENq1"] > 0.05 && precision["EX1"] > 0.05) {
             return false;
         }
     }
 
     // Check if precisions for the voice channels (and E[X1]) parameters are okay
-    if (precision["EW2"] <= 0.05 && precision["ET2"] <= 0.05 && precision["ENq2"] <= 0.05 && precision["EX1"] <= 0.05) {
+    if (precision["EW2"] <= 0.05 && precision["ET2"] <= 0.05 && precision["ENq2"] <= 0.05 /*&& precision["EX1"] <= 0.05*/) {
         show();
         return true;
     }
