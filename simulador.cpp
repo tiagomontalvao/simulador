@@ -85,7 +85,7 @@ struct RoundMetrics {
     int data_packets_processed;
     int voice_packets_processed;
     int delta_intervals;
-    int last_t1, last_t2;
+    double last_t1, last_t2;
 
     RoundMetrics() {}
 
