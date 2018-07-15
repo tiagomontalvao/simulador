@@ -305,15 +305,15 @@ void run_simulation(int warmup_period, int round_size, double rho, bool interrup
 
             // If this is the last arrival in the warm-up period...
             if (cur_round == -1 && num_arrivals == warmup_period) {
-                cur_round++;
-
                 // Next arrival belongs to round 0
+                cur_round++;
                 round_metrics.emplace_back(cur_round, round_size);
                 round_metrics[cur_round].init();
             }
 
             // If this is the last arrival that belongs to this round...
             if (cur_round != -1 && (num_arrivals + 1 - warmup_period) / round_size == cur_round + 1) {
+                // End this round before starting the next
                 round_metrics[cur_round].end_t = sim_t;
 
                 // Next arrival belongs to next round;
