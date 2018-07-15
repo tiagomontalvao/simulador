@@ -85,7 +85,7 @@ struct RoundMetrics {
     int data_packets_processed;
     int voice_packets_processed;
     int delta_intervals;
-    int last_t1, last_t2;
+    double last_t1, last_t2;
 
     RoundMetrics() {}
 
@@ -267,7 +267,7 @@ void simulation_state_init(int warmup_period, int round_size, double rho, bool i
     results = FinalMetrics();
 
     round_metrics.clear();
-    cur_round = -1;
+    cur_round = warmup_period ? -1 : 0;
 }
 
 void event_queue_init() {
@@ -300,17 +300,27 @@ void run_simulation(int warmup_period, int round_size, double rho, bool interrup
 
         // Deal with the event
         if (cur_event.type == ARRIVAL) {
-            if ((num_arrivals - warmup_period) / round_size == cur_round + 1) {
-                if (cur_round != -1)
-                    round_metrics[cur_round].end_t = sim_t;
+            num_arrivals++;
+            cur_event.round_id = cur_round;
+
+            // If this is the last arrival in the warm-up period...
+            if (cur_round == -1 && num_arrivals == warmup_period) {
                 cur_round++;
-                
+
+                // Next arrival belongs to round 0
                 round_metrics.emplace_back(cur_round, round_size);
                 round_metrics[cur_round].init();
             }
 
-            cur_event.round_id = cur_round;
-            num_arrivals++;
+            // If this is the last arrival that belongs to this round...
+            if (cur_round != -1 && (num_arrivals + 1 - warmup_period) / round_size == cur_round + 1) {
+                round_metrics[cur_round].end_t = sim_t;
+
+                // Next arrival belongs to next round;
+                cur_round++;
+                round_metrics.emplace_back(cur_round, round_size);
+                round_metrics[cur_round].init();
+            }
 
             if (cur_round != -1)
                 round_metrics[cur_round].update_Nq_sum(cur_event);
@@ -592,6 +602,10 @@ void RoundMetrics::update_on_departure(const Event& cur_event) {
     packets_processed++;
 
     if (packets_processed == target) {
+        if (end_t < 0) {
+            cout << "WTF" << endl;
+            exit(-1);
+        }
         compute_estimators();
     }
 
@@ -617,14 +631,6 @@ void FinalMetrics::add_metrics(const RoundMetrics &round_metrics) {
         sum[param] += it.second;
         sum_of_squares[param] += it.second * it.second;
 
-        if (num_samples < 8) continue;
-
-        math::students_t t_dist(num_samples-1);
-        double var = variance(sum[param], sum_of_squares[param], num_samples);
-        mean[param] = sum[param] / num_samples;
-        ci_halfwidth[param] = quantile(complement(t_dist, 0.1/2)) * sqrt(var/num_samples);
-        precision[param] = ci_halfwidth[param] / mean[param];
-
         #ifdef PYTHON_SCRIPT
         cerr << param << " " << it.second << " ";
         #endif
@@ -642,6 +648,16 @@ void FinalMetrics::add_metrics(const RoundMetrics &round_metrics) {
     #endif
 
     if (num_samples < 8) return;
+
+    math::students_t t_dist(num_samples-1);
+    double t_ppf = quantile(complement(t_dist, 0.1/2));
+    for (auto const &it: sum) {
+        auto &param = it.first;
+        double var = variance(sum[param], sum_of_squares[param], num_samples);
+        mean[param] = sum[param] / num_samples;
+        ci_halfwidth[param] = t_ppf * sqrt(var/num_samples);
+        precision[param] = ci_halfwidth[param] / mean[param];
+    }
 
     // If there are no interruptions, check if precisions
     // for the data channel parameters are okay (except E[X1])
