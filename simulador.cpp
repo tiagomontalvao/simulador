@@ -674,6 +674,10 @@ bool FinalMetrics::has_enough_precision(bool interrupt) {
         mean[param] = sum[param] / num_samples;
         ci_halfwidth[param] = t_ppf * sqrt(var/num_samples);
         precision[param] = ci_halfwidth[param] / mean[param];
+
+        // Check for NaN
+        if (precision[param] != precision[param])
+            precision[param] = 0;
     }
 
     // If there are no interruptions, check if precisions
