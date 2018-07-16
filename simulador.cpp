@@ -652,7 +652,7 @@ bool FinalMetrics::have_enough_precision() {
     // If there are no interruptions, check if precisions
     // for the data channel parameters are okay (except E[X1])
     if (!interrupt) {
-        if (precision["EW1"] > 0.05 && precision["ET1"] > 0.05 && precision["ENq1"] > 0.05 && precision["EX1"] > 0.05) {
+        if (precision["EW1"] > 0.05 || precision["ET1"] > 0.05 || precision["ENq1"] > 0.05 || precision["EX1"] > 0.05) {
             return false;
         }
     }
