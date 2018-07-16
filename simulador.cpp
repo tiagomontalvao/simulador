@@ -359,6 +359,8 @@ void run_simulation(int warmup_period, int round_size, double rho, bool interrup
     }
 }
 
+// Handle arrival from packets in general
+// Call specific functions to handle data or voice packets
 void handle_arrival(Event &cur_event, bool interrupt) {
     assert(cur_event.type == ARRIVAL);
 
@@ -373,6 +375,7 @@ void handle_arrival(Event &cur_event, bool interrupt) {
     event_queue.insert(make_arrival_from(cur_event));
 }
 
+// Handle arrival from data packets
 void handle_data_arrival(Event &cur_event) {
     assert(cur_event.type == ARRIVAL && cur_event.packet_type == DATA);
 
@@ -383,6 +386,7 @@ void handle_data_arrival(Event &cur_event) {
     }
 }
 
+// Handle arrival from voice packets
 void handle_voice_arrival(Event &cur_event, bool interrupt) {
     assert(cur_event.type == ARRIVAL && cur_event.packet_type == VOICE);
 
@@ -395,6 +399,7 @@ void handle_voice_arrival(Event &cur_event, bool interrupt) {
     }
 }
 
+// Process new packet from the front of a queue
 void serve_next_packet() {
     // Server is set to idle until a packet manages to get in
     idle = true;
@@ -409,6 +414,7 @@ void serve_next_packet() {
     }
 }
 
+// Insert event into the server
 void enter_the_server(const Event &event, bool force) {
     assert(event.type == ARRIVAL);
 
@@ -427,6 +433,7 @@ void enter_the_server(const Event &event, bool force) {
     idle = false;
 }
 
+// Remove departure event from event queue
 void unschedule_data_departure() {
     // Find the DEPARTURE event in the event queue
     auto it = find_if(event_queue.begin(), event_queue.end(),
@@ -472,6 +479,7 @@ Event::Event(int channel): type(ARRIVAL), channel(channel) {
     id = id_counter++;
 }
 
+// Constructs new event based on existing event
 Event make_arrival_from(const Event &event) {
     assert(event.type == ARRIVAL);
     Event new_event(event);
@@ -505,6 +513,7 @@ Event make_arrival_from(const Event &event) {
     return new_event;
 }
 
+// Constructs departure event based on arrival event
 Event make_departure_from(const Event &event) {
     assert(event.type == ARRIVAL);
     Event new_event(event);
@@ -648,6 +657,7 @@ void FinalMetrics::add_metrics(const RoundMetrics &round_metrics) {
     #endif
 }
 
+// Check if precision is sufficient to stop processing new rounds
 bool FinalMetrics::have_enough_precision() {
     if (num_samples < 8) return false;
 
@@ -682,6 +692,7 @@ bool FinalMetrics::have_enough_precision() {
     return false;
 }
 
+// Print confidence intervals for all below estimators
 void FinalMetrics::show() {
     #define show_param(x) cout << mean[x] - ci_halfwidth[x] << "," << mean[x] << "," << mean[x] + ci_halfwidth[x] << ",";
 
