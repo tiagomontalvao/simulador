@@ -212,6 +212,7 @@ int main(int argc, char *argv[]) {
     const string mt_state_filename = "mt_state.sav";
     ifstream mt_state_r(mt_state_filename, ios::in | ios::binary);
 
+    // Restores PRNG state
     if (mt_state_r.good()) {
         mt_state_r >> mt;
         mt_state_r.close();
@@ -228,8 +229,8 @@ int main(int argc, char *argv[]) {
 
         run_simulation(warmup_period, round_size, rho, interrupt);
     } else {
-        warmup_period = 10000;
-        round_size = 15000;
+        warmup_period = 300000;
+        round_size = 20000;
         
         for (int i = 1; i < 8; ++i) {
             run_simulation(warmup_period, round_size, i/10.0, false);
@@ -241,6 +242,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    // Saves the PRNG state
     ofstream mt_state_w(mt_state_filename, ios::out | ios::binary);
     mt_state_w << mt;
     mt_state_w.close();
@@ -307,35 +309,49 @@ void run_simulation(int warmup_period, int round_size, double rho, bool interrup
             // All arrivals belong to the current round
             cur_event.round_id = cur_round;
 
+            // Update statistics if not on warmup period
             if (cur_round != -1)
                 round_metrics[cur_round].update_Nq_sum(cur_event);
 
+            // Change system state
             handle_arrival(cur_event, interrupt);
         } else {
+            // Update statistics if not on warmup period
             if (cur_round != -1) {
                 round_metrics[cur_round].update_Nq_sum(cur_event);
 
+                // Update statistics for this round, if the exiting
+                // packet belongs to this round
                 if (cur_event.round_id == cur_round)
                     round_metrics[cur_round].update_on_departure(cur_event);
             } else {
                 warmup_departures++;
             }
 
+            // When a voice packet leaves, it records its departure time
+            // so that the last departure in every channel is known
             if (cur_event.packet_type == VOICE) {
                 last_voice_departure_t[cur_event.channel] = sim_t;
             }
 
+            // If this is the warmup period and there has been warmup_period departures
+            // then start round 0.
             if (cur_round == -1 && warmup_departures == warmup_period) {
                 round_metrics.emplace_back(cur_round++, round_size);
+
             } else if (cur_round != -1 && round_metrics[cur_round].end_t > 0) {
+                // Add this rounds estimatives to the results
                 results.add_metrics(round_metrics[cur_round]);
 
+                // Stop simulation if estimatives have enough precision
                 if (results.have_enough_precision()) break;
 
+                // If not, start next round
                 round_metrics.emplace_back(cur_round++, round_size);
                 round_metrics[cur_round].init();
             }
             
+            // Serve next packet in line, if there is one
             serve_next_packet();
         }
 
@@ -650,15 +666,15 @@ bool FinalMetrics::have_enough_precision() {
     }
 
     // If there are no interruptions, check if precisions
-    // for the data channel parameters are okay (except E[X1])
+    // for the data channel parameters are okay
     if (!interrupt) {
         if (precision["EW1"] > 0.05 || precision["ET1"] > 0.05 || precision["ENq1"] > 0.05 || precision["EX1"] > 0.05) {
             return false;
         }
     }
 
-    // Check if precisions for the voice channels (and E[X1]) parameters are okay
-    if (precision["EW2"] <= 0.05 && precision["ET2"] <= 0.05 && precision["ENq2"] <= 0.05 /*&& precision["EX1"] <= 0.05*/) {
+    // Check if precisions for the voice channels parameters are okay
+    if (precision["EW2"] <= 0.05 && precision["ET2"] <= 0.05 && precision["ENq2"] <= 0.05) {
         show();
         return true;
     }
