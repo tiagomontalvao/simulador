@@ -7,9 +7,11 @@ import scipy.stats as st
 from sys import argv
 
 def get_auto_cov(x, mean):
-	n = len(xs)
+	n = len(x)
 	xi_sum = np.sum([(x[i] - mean) * (x[i+1] - mean) for i in range(n-1)])
 	return xi_sum/(n-2)
+
+nm = []
 
 if __name__ == "__main__":
 	try:
@@ -22,19 +24,19 @@ if __name__ == "__main__":
 	# sp.run('make clean', shell=True, stdout=devnull)
 	sp.run('make CPPFLAGS="-D PYTHON_SCRIPT"', shell=True, stdout=devnull)
 	
-	warmup = 10000
-	rho = 0.4
+	warmup = 500000
+	rho = 0.7
 	interrupt = 0
 
 	def next_round_size():
-		k = 15000
-		for i in range(1):
+		k = 50
+		for i in range(500):
 			yield int(k)
-			k *= 1.7
+			k *= 1.5
 
 	interrupt_str = "ON" if interrupt else "OFF"
 	print('Parameter: ' + metric + f' (warmup={warmup}, rho1={rho}, interruption {interrupt_str})')
-	print('{:<10} {:<10} {:<14} {:<14} {:<12} {:<10} {:^5}'.format('Rounds', 'Round size', 'Mean', 'Autocovariance', 'Variance', 'IC', 'Prec'))
+	print('{:<10} {:<10} {:<10} {:<14} {:<12} {:<10} {:^5}'.format('Rounds', 'Round size', 'Mean', 'Autocovariance', 'Variance', 'IC', 'Prec'))
 	for round_size in next_round_size():
 		acc_avg = dict()
 		op = sp.run('./simulador {} {} {} {}'.format(warmup, round_size, rho, interrupt), stderr=sp.PIPE, stdout=devnull, shell=True, check=True)
@@ -47,13 +49,24 @@ if __name__ == "__main__":
 
 			x.append(dict(zip(metrics, round_means)))
 
-		xs = [xi[metric] for xi in x]
-		mean = np.mean(xs)
-		var = np.var(xs, ddof=1)
+		xs = dict()
+		mean = dict()
+		autocov = dict()
+		var = dict()
+		for param in x[0].keys():
+			xs[param] = [xi[param] for xi in x]
+			mean[param] = np.mean(xs[param])
+			autocov[param] = get_auto_cov(xs[param], mean[param])
+			var[param] = np.var(xs[param], ddof=1)
+		
+		ic = st.t.interval(0.9, len(xs[metric])-1, scale=np.sqrt(var[metric]/len(xs[metric])))
+		prec = ic[1]/mean[metric] * 100
 
-		ic = st.t.interval(0.9, len(xs)-1, scale=np.sqrt(var/len(xs)))
-		prec = ic[1]/mean * 100
+		print('{:<10} {:<10} {:<10.6f} {:<14.6f} {:<12.6f} ±{:<10.6f}{:>5.2f}%'.format(len(xs[metric]), round_size, mean[metric], autocov[metric], var[metric], ic[1], prec))
 
-		print('{:<10} {:<10} {:<14.6f} {:<14.6f} {:<12.6f} ±{:<10.6f}{:>5.2f}%'.format(len(xs), round_size, mean, get_auto_cov(xs, mean), var, ic[1], prec))
+		if any(var[param] / abs(autocov[param]) < 5 for param in xs.keys()):
+			continue
+		else:
+			break
 
 	# sp.run('make clean', shell=True, stdout=devnull)
